@@ -18,6 +18,34 @@ Short records of the trade-offs made while building FairShare Solar. The numbere
 
 **Consequences.** Matches the Postgres / Jest / Nest stack in the job ad and stays inside a one-day timebox. Prisma warns that `package.json#prisma` is deprecated; that is expected on 6.x. Upgrade path: NestJS 12 (ESM) and Prisma 7 (driver adapter + `prisma.config.ts`) together, then TypeScript 7 once ts-jest supports it.
 
+## ADR-003 Split mode applies from the next interval
+
+**Context.** A building manager can switch between *Equal* and *By lot entitlement* at any time. Recomputing past intervals would change history people may already have seen or billed against.
+
+**Decision.** Ingest reads the building's current `splitMode` inside the insert transaction and stores it on the reading as `splitModeUsed`. `PATCH /api/buildings/:id` only changes the building, never existing readings.
+
+**Consequences.** Past intervals stay exactly as they were computed, and every reading says which rule produced it. An e2e test patches the mode between two readings and checks that only the second one changes. A mode change that commits while an ingest is in flight applies to whichever reading reads it first. That is acceptable at 5-minute granularity.
+
+## ADR-004 One ingestion path
+
+**Context.** Readings arrive over HTTP from devices, and also from the built-in simulator and the seed's history (M5). Separate paths would drift apart in validation and idempotency.
+
+**Decision.** `ReadingsService.ingest(buildingId, dto)` is the only way a reading is stored. It runs the §5.7 checks (alignment, building, capacity, apartment set), the idempotency rules and the transaction. The simulator and seed will build the same `CreateReadingDto` and call it directly.
+
+**Consequences.** Every rule is tested once, through e2e, and holds for every source. Callers that bypass HTTP also bypass the `ValidationPipe`, so they must build DTOs that are already valid. The simulator does this by construction.
+
+## ADR-006 Idempotent ingest
+
+**Context.** Devices retry on timeouts, so the same interval can arrive more than once, sometimes concurrently. Silently keeping either copy of a *different* payload would hide a real device fault.
+
+**Decision.** `Reading` is unique on `(deviceId, intervalStart)` and stores a sha256 `payloadHash` of a canonical form of the reading: ISO UTC time and demands sorted by apartment id. If the same interval arrives again:
+- same hash and same building: **200** with the stored result and `replayed: true`, writing nothing;
+- anything else: **409**.
+
+If two inserts race, the loser's `P2002` unique-violation is caught, and the same rule is applied against the row that won.
+
+**Consequences.** Retries are safe and conflicts are loud. The e2e suite covers replay (row counts unchanged), 409, real concurrent requests, and a forced lost race that exercises the `P2002` branch deterministically.
+
 ## ADR-007 Water-filling allocation model
 
 **Context.** Each 5-minute interval's solar must be split between apartments. The split has to be fair, explainable in one sentence, and add up exactly to the watt-hour (ADR-001). This is my own simplified model for a demo. It is **not** the algorithm used by any commercial product.
@@ -41,3 +69,9 @@ Short records of the trade-offs made while building FairShare Solar. The numbere
 - **M3: the seed looks up the building by name with `findFirst`, not `upsert`.** `Building.name` isn't unique in the §5.5 schema, and Prisma's `upsert` needs a unique key. Apartments are upserted by `(buildingId, label)`. Re-seeding keeps the building's current split mode. The demo data and upsert live in `prisma/demo-building.ts`, shared by the seed and the e2e reset. `prisma/` is excluded from the Nest build so `dist/main.js` stays at the root.
 - **M3: one HTTP setup for the app and the tests.** `src/app.setup.ts` (global prefix, ValidationPipe, shutdown hooks) is called by `main.ts` and by the e2e `createTestApp()`, so tests exercise the same pipeline as production.
 - **M3: `GET /api/buildings/:id` also returns `intervalMinutes`.** The dashboard needs the interval length, and it costs nothing to include.
+- **M4: `intervalStart` must carry a timezone (`Z` or `±hh:mm`).** `IsISO8601` accepts `2026-10-20T03:05:00`, which JavaScript parses in the server's local zone (Melbourne would shift it by 10–11 hours). Such values are rejected with 400.
+- **M4: alignment is checked twice.** §5.7 orders the alignment check before the building lookup, so it checks the fixed 5-minute device grid first, with the brief's exact message. After the building is found, it also checks the building's own `intervalMinutes`; for the demo building both are 5.
+- **M4: a replay must match the building too.** The payload hash doesn't include the building, so the same payload posted to another building's URL is a 409, not a replay of the first building's reading.
+- **M4: the P2002 branch is tested by forcing a lost race.** Real concurrent requests are also tested, but either path can win. One test makes the pre-insert lookup miss once (a Jest spy on the private `findExisting`), so the insert hits the unique key and the catch branch must produce the replay or 409.
+- **M4: the summary uses Prisma `aggregate` and `groupBy` with a relation filter.** The relation filter in `groupBy` works on Prisma 6.19, so no raw SQL was needed. Totals are summed in Postgres. Only one row per apartment comes back to Node.
+- **M4: the payload hash sorts apartment ids by code unit, not `localeCompare`,** so the hash can't change with the server's locale.

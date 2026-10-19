@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { HealthController } from './health/health.controller';
 import { BuildingsModule } from './buildings/buildings.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ReadingsModule } from './readings/readings.module';
 
 // Fail fast at startup rather than on the first query.
 function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
@@ -19,6 +20,7 @@ function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     PrismaModule,
     BuildingsModule,
+    ReadingsModule,
   ],
   controllers: [HealthController],
 })

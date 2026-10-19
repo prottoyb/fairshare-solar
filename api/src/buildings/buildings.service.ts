@@ -40,7 +40,7 @@ export class BuildingsService {
       where: { id },
       select: buildingDetail,
     });
-    if (!building) throw notFound(id);
+    if (!building) throw buildingNotFound(id);
     return building;
   }
 
@@ -60,13 +60,13 @@ export class BuildingsService {
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2025'
       ) {
-        throw notFound(id);
+        throw buildingNotFound(id);
       }
       throw err;
     }
   }
 }
 
-function notFound(id: string): NotFoundException {
+export function buildingNotFound(id: string): NotFoundException {
   return new NotFoundException(`Building ${id} not found`);
 }
