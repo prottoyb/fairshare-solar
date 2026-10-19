@@ -1,6 +1,6 @@
 # Decisions
 
-Short records of the trade-offs made while building FairShare Solar. The numbered ADRs from the brief (§8) are filled in as each milestone lands; smaller build-time decisions are logged at the bottom.
+Short records of the trade-offs made while building FairShare Solar: the seven architecture decisions (ADR-001 to ADR-007, Context / Decision / Consequences), then a milestone-by-milestone log of smaller build-time decisions.
 
 ## ADR-001 Integer watt-hours everywhere
 
@@ -33,6 +33,14 @@ Short records of the trade-offs made while building FairShare Solar. The numbere
 **Decision.** `ReadingsService.ingest(buildingId, dto)` is the only way a reading is stored. It runs the §5.7 checks (alignment, building, capacity, apartment set), the idempotency rules and the transaction. The simulator and the seed's history both get their readings from one seeded `ReadingGenerator` (built on the pure profile functions) and call `ingest()` directly. Committed readings are published on an in-process `LiveEventsService` bus, which the device-status service and the Socket.IO gateway subscribe to.
 
 **Consequences.** Every rule is tested once, through e2e, and holds for every source. Callers that bypass HTTP also bypass the `ValidationPipe`, so they must build DTOs that are already valid. The generator does this by construction, and a unit test checks it for a whole day. A simulated or seeded reading goes through the same idempotency and the same `reading` event as one from a device.
+
+## ADR-005 Duplicated DTO types in the web app
+
+**Context.** The Vue app needs the API's response shapes: building, reading, summary, simulator status and the WebSocket events. A shared types package would need its own build, TypeScript project references and workspace wiring across a CommonJS NestJS app (TS 5.9) and an ESM Vite app (TS 6).
+
+**Decision.** `web/src/types.ts` duplicates the shapes by hand, with a comment pointing here. The API stays the source of truth: its e2e tests assert the exact response bodies.
+
+**Consequences.** No extra build step for a one-day demo. The cost is drift: an API change also needs a change in `types.ts`, and nothing enforces it at compile time. With more than one client, I'd generate the types from an OpenAPI document instead (see README "What I'd do next").
 
 ## ADR-006 Idempotent ingest
 
@@ -92,3 +100,17 @@ If two inserts race, the loser's `P2002` unique-violation is caught, and the sam
 - **M6: responsive layout uses CSS grid areas.** One column on phones, two on tablets, three at ≥ 75rem, so at 1280×720 the controls, live figures and all six bars are above the fold for the video. Checked at 375 px: no horizontal page scroll; the summary table scrolls inside its own container.
 - **M6: F13 (sparkline) not built.** It is first in the cut order and was not needed for J1–J3.
 - **M6 follow-up: Vue DevTools is opt-in.** The scaffold's `vite-plugin-vue-devtools` puts a floating button on every page, which would appear in the demo video. It now loads only when `VUE_DEVTOOLS=1` is set for the dev server; the dependency stays, with no package changes.
+- **M6 follow-up: keep 30 kW and the brief's demand; time the video to the morning.** With the §5.6/§6.2 numbers, solar exceeds demand from about 08:15 to late afternoon. When every demand is met, both split modes give identical results, so the Equal/Entitlement difference is only visible while solar is scarce. One simulated day (seed 42, real generator and engine; "visible" means some apartment differs by at least 15 Wh between modes):
+
+  | Option | Visible in (of 143 daylight intervals) | Largest difference | Brief change |
+  |---|---|---|---|
+  | **A. As briefed: 30 kW, §6.2 demand (chosen)** | 32 (06:15–08:10, 17:10–17:45) | 91 Wh | none |
+  | B. 10 kW system | 38 | 55 Wh | §5.6 |
+  | E. 8 kW system | 43 | 44 Wh | §5.6 |
+  | C. 6 kW system | 52, in fragments | 36 Wh | §5.6 |
+  | D. 30 kW, demand ×3 | 55 (06:15–08:50, 16:00–17:45) | 162 Wh | §6.2 |
+
+  A smaller system lengthens the scarce window but shrinks the differences on screen; only higher demand improves both. Option A keeps the brief intact. The difference is largest at 06:30–07:40: at 07:20, for example, Unit 6 (entitlement 30) gets 113 Wh on Equal vs 204 Wh on Entitlement, and Unit 1 (entitlement 10) gets 114 vs 68. **Decision:** record the video segment in the **06:15–07:00** simulated window. Run at 1 s until about 06:15, stop, then record: Start → switch to Entitlement at about 06:30 → Stop at about 07:00 → Stale. The README's video notes describe this.
+- **M7: the Cypress smoke test starts from a known state.** Before each run (and after), it stops the simulator and sets the split mode back to Equal through the API. It also waits until the pill is *not* Online before clicking Start, so "Online within 5 s" really proves the start worked. It ran green twice in a row against `npm.cmd run dev`.
+- **M7: CI uses throwaway Postgres credentials.** The `postgres:17` service container is created with a CI-only user and password, and the workflow writes `api/.env.test` from them. The developer's password never leaves their machine. `CYPRESS_INSTALL_BINARY=0` skips the Cypress download, since Cypress in CI is a stretch goal (F11).
+- **M7: `docs/dashboard.png` is a Cypress viewport screenshot** (1280×720) in Entitlement mode at 07:05 simulated, when solar is scarce. The bars split 56/56/84/84/112/167 Wh for entitlements 10/10/15/15/20/30. It was taken with a one-off capture spec that was not committed.

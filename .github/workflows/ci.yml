@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          # Throwaway credentials for this CI container only.
+          POSTGRES_USER: fairshare
+          POSTGRES_PASSWORD: fairshare_ci
+          POSTGRES_DB: fairshare_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fairshare -d fairshare_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Cypress runs locally only (brief F11); skip the ~500 MB binary download.
+      CYPRESS_INSTALL_BINARY: '0'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Write test environment
+        run: |
+          printf '%s\n' \
+            'DATABASE_URL="postgresql://fairshare:fairshare_ci@localhost:5432/fairshare_test?schema=public"' \
+            'PORT=3000' \
+            'SIM_SEED=42' > api/.env.test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # api unit → api e2e (migrates fairshare_test, then Jest + Supertest) → web unit
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
