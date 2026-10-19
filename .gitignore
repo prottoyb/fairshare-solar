@@ -21,6 +21,9 @@ Thumbs.db
 # Personal Claude Code settings (local permission rules)
 .claude/settings.local.json
 
+# Private original of the spec; SPEC.md is the public copy
+PROJECT_BRIEF.md
+
 # Cypress artefacts
 web/cypress/videos/
 web/cypress/screenshots/

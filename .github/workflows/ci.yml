@@ -27,7 +27,7 @@ jobs:
           --health-retries 10
 
     env:
-      # Cypress runs locally only (brief F11); skip the ~500 MB binary download.
+      # Cypress runs locally only (SPEC.md F11); skip the ~500 MB binary download.
       CYPRESS_INSTALL_BINARY: '0'
 
     steps:

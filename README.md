@@ -69,7 +69,7 @@ flowchart LR
 - **Live**: the `reading` event is emitted only after commit and never for replays. `device-status` is emitted only when the status changes, and sent to each client as it connects.
 - **Daily summary**: totals come from Postgres `aggregate` / `groupBy` over the UTC day; percentages are rounded to 1 decimal only in the response.
 
-Decisions and trade-offs: [DECISIONS.md](DECISIONS.md) (7 ADRs plus a build log). On-call: [RUNBOOK.md](RUNBOOK.md).
+Specification: [SPEC.md](SPEC.md). Decisions and trade-offs: [DECISIONS.md](DECISIONS.md) (7 ADRs plus a build log). On-call: [RUNBOOK.md](RUNBOOK.md).
 
 ## Allocation model
 
@@ -105,18 +105,18 @@ The e2e suite applies migrations with `prisma migrate deploy` and truncates ever
 
 I built this with **Claude Code** as a pair. It scaffolded the workspaces and drafted most of the code, tests and docs, one milestone at a time. Before approving the next milestone, I checked each one myself: reading the diff, running `npm.cmd test` on my machine, and walking the journeys in the browser. The bar for AI-written code was the same as for my own: invariant tests, property tests, e2e tests against a real database, and lint and typecheck clean before every commit.
 
-**A test caught a real mistake.** The brief's own allocation algorithm said to hand out leftover rounding Wh "by weight, descending". The engine was written test-first, and the invariant test I4 ("within 1 Wh of the proportional share") failed on it. At 10 Wh with weights 2/1/1 it gave 6/2/2, not 5/3/2, and with many apartments a second proportional round could pile several Wh onto one heavy apartment. The fix (largest-remainder rounding) kept all seven worked examples unchanged and is recorded in [ADR-007](DECISIONS.md).
+**A test caught a real mistake.** The spec's own allocation algorithm ([SPEC.md](SPEC.md) §6.1) said to hand out leftover rounding Wh "by weight, descending". The engine was written test-first, and the invariant test I4 ("within 1 Wh of the proportional share") failed on it. At 10 Wh with weights 2/1/1 it gave 6/2/2, not 5/3/2, and with many apartments a second proportional round could pile several Wh onto one heavy apartment. The fix (largest-remainder rounding) kept all seven worked examples unchanged and is recorded in [ADR-007](DECISIONS.md).
 
 **Guardrails for autonomous work.** [`CLAUDE.md`](CLAUDE.md) sets the rules the agent works under:
 - Rules: one milestone at a time, lint + typecheck + tests green before every commit, never weaken a test, pinned versions only, hands off `.env` files, the `postgres` superuser and dev data, never push.
-- Stop conditions: the same step fails twice; it needs a secret, consent or a database reset; it wants to add a dependency, or change an API shape, the scope or a rule in the brief.
+- Stop conditions: the same step fails twice; it needs a secret, consent or a database reset; it wants to add a dependency, or change an API shape, the scope or a rule in the spec.
 - A local Claude Code permission file (not committed) denies `git push` / `config` / `reset --hard` / `clean` / `rebase`, `prisma migrate reset`, `psql` as `postgres`, `DROP DATABASE`, and deletes outside the repo.
 - Prisma 6.19 has its own guard: it refuses `migrate reset` from an AI agent without explicit consent. The e2e setup was changed to `migrate deploy` plus a truncate step that only ever runs on `fairshare_test`.
 
 **Other things the process caught:**
 - A test that forced the `P2002` race branch, because the plain concurrency test passed whichever way the race went.
 - A legend CSS bug found during the browser check.
-- A measurement showing that with these numbers the split modes only differ in short scarce windows. I kept the brief's numbers and timed the demo recording to the morning ([DECISIONS.md](DECISIONS.md)).
+- A measurement showing that with these numbers the split modes only differ in short scarce windows. I kept the spec's numbers and timed the demo recording to the morning ([DECISIONS.md](DECISIONS.md)).
 
 ## What I'd do next
 
@@ -144,5 +144,5 @@ api/   NestJS 11 API (Prisma schema, migrations and seed in api/prisma)
 web/   Vue 3 dashboard (Vite, Vitest, Cypress)
 docs/  dashboard screenshot
 .github/workflows/ci.yml
-DECISIONS.md  RUNBOOK.md  CLAUDE.md  PROJECT_BRIEF.md
+SPEC.md  DECISIONS.md  RUNBOOK.md  CLAUDE.md
 ```

@@ -1,8 +1,8 @@
-/** Device status rules (brief §6.3). Pure: no framework imports. */
+/** Device status rules (SPEC.md §6.3). Pure: no framework imports. */
 
 export type DeviceStatus = 'OFFLINE' | 'ONLINE' | 'STALE';
 
-/** Payload of the `device-status` WebSocket event (brief §5.8). */
+/** Payload of the `device-status` WebSocket event (SPEC.md §5.8). */
 export type DeviceStatusEvent = {
   buildingId: string;
   deviceId: string;

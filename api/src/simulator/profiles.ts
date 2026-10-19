@@ -1,5 +1,5 @@
 /**
- * Solar and demand profiles for the simulator (brief §6.2). Pure: no framework
+ * Solar and demand profiles for the simulator (SPEC.md §6.2). Pure: no framework
  * imports, no clock, no randomness of their own. Random draws are passed in.
  * The UTC hour is treated as "local" time for the demo.
  */

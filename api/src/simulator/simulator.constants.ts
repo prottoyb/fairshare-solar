@@ -1,7 +1,7 @@
-/** The built-in simulator's device id (brief §5.6). */
+/** The built-in simulator's device id (SPEC.md §5.6). */
 export const SIM_DEVICE_ID = 'sim-device-001';
 
-/** Real milliseconds between simulated 5-minute intervals (brief §6.2). */
+/** Real milliseconds between simulated 5-minute intervals (SPEC.md §6.2). */
 export const DEFAULT_SPEED_MS = 2000;
 export const MIN_SPEED_MS = 500;
 export const MAX_SPEED_MS = 10_000;

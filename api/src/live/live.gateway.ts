@@ -12,7 +12,7 @@ import { LiveEventsService } from './live-events.service';
 type Emitter = { emit(event: string, ...args: unknown[]): unknown };
 
 /**
- * Socket.IO on the default namespace and the API's port (brief §5.8).
+ * Socket.IO on the default namespace and the API's port (SPEC.md §5.8).
  * `reading` after each committed interval (never replays); `device-status` on
  * change, and the current status to each client as it connects.
  */

@@ -139,7 +139,7 @@ export class ReadingsService {
       throw err;
     }
 
-    // Only after the commit, and never for replays (brief §5.8).
+    // Only after the commit, and never for replays (SPEC.md §5.8).
     this.live.publishReading({ deviceId: dto.deviceId, reading: created });
     return created;
   }

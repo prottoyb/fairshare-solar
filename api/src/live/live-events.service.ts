@@ -6,7 +6,7 @@ import { DeviceStatusEvent } from './device-status';
 export type ReadingEvent = { deviceId: string; reading: ReadingResult };
 
 /**
- * In-process event bus (brief §6.3). ReadingsService publishes committed readings;
+ * In-process event bus (SPEC.md §6.3). ReadingsService publishes committed readings;
  * DeviceStatusService and the gateway subscribe. Keeps those services free of
  * imports on each other, so there are no circular dependencies.
  */

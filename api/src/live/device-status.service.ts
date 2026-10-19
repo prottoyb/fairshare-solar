@@ -20,7 +20,7 @@ type TrackedDevice = {
 
 /**
  * Tracks each device's last reading (wall clock) and publishes `device-status`
- * only when a status changes (brief §6.3). Rechecked every second and on every
+ * only when a status changes (SPEC.md §6.3). Rechecked every second and on every
  * new reading. The stale threshold follows the simulator's current speed.
  */
 @Injectable()

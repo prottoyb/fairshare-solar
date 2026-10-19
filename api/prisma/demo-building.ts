@@ -1,6 +1,6 @@
 import { PrismaClient, SplitMode } from '@prisma/client';
 
-/** Seed data from PROJECT_BRIEF.md §5.6. */
+/** Seed data from SPEC.md §5.6. */
 export const DEMO_BUILDING = {
   name: 'Demo Building A',
   capacityW: 30000,

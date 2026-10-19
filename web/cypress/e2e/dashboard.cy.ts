@@ -1,4 +1,4 @@
-// Smoke test for journeys J1–J3 (brief §7). Needs `npm.cmd run dev` running.
+// Smoke test for journeys J1–J3 (SPEC.md §7). Needs `npm.cmd run dev` running.
 // It is the only test that starts the simulator timer.
 
 function resetDemo() {
