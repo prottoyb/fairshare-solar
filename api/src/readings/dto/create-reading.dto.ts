@@ -11,8 +11,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-
-export const MAX_DEMAND_WH = 10_000;
+import { MAX_DEMAND_WH } from '../../common/limits';
 
 export class DemandDto {
   @IsString()

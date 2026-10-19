@@ -18,6 +18,9 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
+# Personal Claude Code settings (local permission rules)
+.claude/settings.local.json
+
 # Cypress artefacts
 web/cypress/videos/
 web/cypress/screenshots/

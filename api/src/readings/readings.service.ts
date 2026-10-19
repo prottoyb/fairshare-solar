@@ -6,7 +6,9 @@ import {
 import { Prisma } from '@prisma/client';
 import { allocate } from '../allocation/allocate';
 import { buildingNotFound } from '../buildings/buildings.service';
+import { INTERVAL_MINUTES } from '../common/limits';
 import { isAlignedToInterval } from '../common/time';
+import { LiveEventsService } from '../live/live-events.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateReadingDto, DemandDto } from './dto/create-reading.dto';
 import { payloadHash } from './payload-hash';
@@ -17,12 +19,12 @@ import {
   toReadingResult,
 } from './reading-result';
 
-/** The grid every device reports on (§5.7 check 2). */
-export const INTERVAL_MINUTES = 5;
-
 @Injectable()
 export class ReadingsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly live: LiveEventsService,
+  ) {}
 
   /**
    * The one ingestion path (ADR-004), used by HTTP, the simulator and the seed.
@@ -74,8 +76,9 @@ export class ReadingsService {
     const existing = await this.findExisting(dto.deviceId, intervalStart);
     if (existing) return replayOrConflict(existing, buildingId, hash);
 
+    let created: ReadingResult;
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      created = await this.prisma.$transaction(async (tx) => {
         // Read the mode inside the transaction and snapshot it (ADR-003).
         const { splitMode } = await tx.building.findUniqueOrThrow({
           where: { id: buildingId },
@@ -135,6 +138,10 @@ export class ReadingsService {
       }
       throw err;
     }
+
+    // Only after the commit, and never for replays (brief §5.8).
+    this.live.publishReading({ deviceId: dto.deviceId, reading: created });
+    return created;
   }
 
   async list(buildingId: string, limit: number): Promise<ReadingResult[]> {

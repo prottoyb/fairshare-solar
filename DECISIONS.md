@@ -30,9 +30,9 @@ Short records of the trade-offs made while building FairShare Solar. The numbere
 
 **Context.** Readings arrive over HTTP from devices, and also from the built-in simulator and the seed's history (M5). Separate paths would drift apart in validation and idempotency.
 
-**Decision.** `ReadingsService.ingest(buildingId, dto)` is the only way a reading is stored. It runs the §5.7 checks (alignment, building, capacity, apartment set), the idempotency rules and the transaction. The simulator and seed will build the same `CreateReadingDto` and call it directly.
+**Decision.** `ReadingsService.ingest(buildingId, dto)` is the only way a reading is stored. It runs the §5.7 checks (alignment, building, capacity, apartment set), the idempotency rules and the transaction. The simulator and the seed's history both get their readings from one seeded `ReadingGenerator` (built on the pure profile functions) and call `ingest()` directly. Committed readings are published on an in-process `LiveEventsService` bus, which the device-status service and the Socket.IO gateway subscribe to.
 
-**Consequences.** Every rule is tested once, through e2e, and holds for every source. Callers that bypass HTTP also bypass the `ValidationPipe`, so they must build DTOs that are already valid. The simulator does this by construction.
+**Consequences.** Every rule is tested once, through e2e, and holds for every source. Callers that bypass HTTP also bypass the `ValidationPipe`, so they must build DTOs that are already valid. The generator does this by construction, and a unit test checks it for a whole day. A simulated or seeded reading goes through the same idempotency and the same `reading` event as one from a device.
 
 ## ADR-006 Idempotent ingest
 
@@ -75,3 +75,11 @@ If two inserts race, the loser's `P2002` unique-violation is caught, and the sam
 - **M4: the P2002 branch is tested by forcing a lost race.** Real concurrent requests are also tested, but either path can win. One test makes the pre-insert lookup miss once (a Jest spy on the private `findExisting`), so the insert hits the unique key and the catch branch must produce the replay or 409.
 - **M4: the summary uses Prisma `aggregate` and `groupBy` with a relation filter.** The relation filter in `groupBy` works on Prisma 6.19, so no raw SQL was needed. Totals are summed in Postgres. Only one row per apartment comes back to Node.
 - **M4: the payload hash sorts apartment ids by code unit, not `localeCompare`,** so the hash can't change with the server's locale.
+- **M5: one seeded `ReadingGenerator` for the simulator and the seed.** It holds the PRNG, the cloud random walk and each apartment's base load, and calls the pure profile functions. Same seed and apartments in, same readings out; a unit test checks a whole day is valid ingest input.
+- **M5: `simulatedTime` in `/api/simulator/status` is the start of the next interval to be sent** (UTC), or `null` before the first start. The dashboard can use its date for the summary.
+- **M5: a failed simulator tick still advances the clock.** Otherwise a single 409 (for example, an interval already stored with other data) would repeat forever. The failure is logged as a warning.
+- **M5: device status is tracked per device id.** The simulator's device is registered as OFFLINE at startup (for the first building) so a new dashboard sees it before any reading. Other devices appear on their first reading. The stale threshold is always 3 × the simulator's current speed (§6.3), even for non-simulator devices.
+- **M5: the seed counts 409s instead of failing.** If the simulator has already written different data for yesterday's UTC date (its clock runs a simulated day about every 10 real minutes), those intervals are reported as conflicts and skipped. A re-run otherwise gives 288 replays (tested e2e).
+- **M5: shared limits live in `common/limits.ts`.** `INTERVAL_MINUTES` and `MAX_DEMAND_WH` are needed by the pure profiles and by validation, so they moved out of the DTO and service into a framework-free file.
+- **M5: the gateway types its server and socket by the one method it uses (`emit`).** This avoids importing types from `socket.io`, which is only a transitive dependency of `@nestjs/platform-socket.io`, and avoids the isolatedModules decorator-metadata issue.
+- **M5: the e2e suite checks the live bus, not a real socket.** `socket.io-client` isn't an API dependency, so e2e subscribes to `LiveEventsService`: one event per new reading, none for a replay or 409. The real socket path (Vite proxy → gateway → client) was smoke-tested by hand: OFFLINE → ONLINE → readings → STALE about 4 s after stopping at 1 s speed.

@@ -8,7 +8,7 @@ export const DEMO_BUILDING = {
   intervalMinutes: 5,
 } as const;
 
-export const DEMO_DEVICE_ID = 'sim-device-001';
+export { SIM_DEVICE_ID as DEMO_DEVICE_ID } from '../src/simulator/simulator.constants';
 
 export const DEMO_APARTMENTS = [10, 10, 15, 15, 20, 30].map(
   (lotEntitlement, i) => ({ label: `Unit ${i + 1}`, lotEntitlement }),

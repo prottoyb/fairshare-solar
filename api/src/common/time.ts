@@ -34,3 +34,20 @@ export function toUtcDateString(date: Date): string {
   }
   return date.toISOString().slice(0, 10);
 }
+
+/** 00:00Z of the UTC day containing `date`. */
+export function startOfUtcDay(date: Date): Date {
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
+}
+
+/** A new Date `minutes` after `date` (negative goes back). */
+export function addMinutes(date: Date, minutes: number): Date {
+  return new Date(date.getTime() + minutes * MS_PER_MINUTE);
+}
+
+/** Fractional UTC hour of the day, e.g. 13:30Z → 13.5. */
+export function utcHourOfDay(date: Date): number {
+  return date.getUTCHours() + date.getUTCMinutes() / 60;
+}
