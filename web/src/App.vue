@@ -1,37 +1,171 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, shallowRef, watch } from 'vue'
+import { api } from '@/api/client'
+import ApartmentBars from '@/components/ApartmentBars.vue'
+import BuildingHeader from '@/components/BuildingHeader.vue'
+import DailySummary from '@/components/DailySummary.vue'
+import LiveFlow from '@/components/LiveFlow.vue'
+import SimulatorControls from '@/components/SimulatorControls.vue'
+import SplitModeToggle from '@/components/SplitModeToggle.vue'
+import { useBuilding } from '@/composables/useBuilding'
+import { useLive } from '@/composables/useLive'
+import type { ReadingResult, SimulatorStatus } from '@/types'
 
-type Health = { status: string; db: string }
+const { building, loading, error, setSplitMode } = useBuilding()
+const { connected, latestReading, deviceStatus, receivedCount } = useLive()
 
-const health = ref<Health | null>(null)
-const error = ref<string | null>(null)
+const simulator = shallowRef<SimulatorStatus | null>(null)
+const storedReading = shallowRef<ReadingResult | null>(null)
 
-onMounted(async () => {
-  try {
-    const res = await fetch('/api/health')
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    health.value = (await res.json()) as Health
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
-  }
-})
+// Show the latest stored interval until the live stream sends a new one.
+watch(
+  () => building.value?.id,
+  async (id) => {
+    if (!id) return
+    try {
+      const [latest] = await api.listReadings(id, 1)
+      storedReading.value = latest ?? null
+    } catch {
+      // The live stream fills this in once readings arrive.
+    }
+  },
+)
+
+const reading = computed(() => latestReading.value ?? storedReading.value)
+
+// The summary follows the simulated clock, which runs ahead of real time.
+const summaryDate = computed(
+  () =>
+    reading.value?.intervalStart.slice(0, 10) ??
+    simulator.value?.simulatedTime?.slice(0, 10) ??
+    null,
+)
 </script>
 
 <template>
-  <main class="shell">
-    <h1>FairShare Solar</h1>
-    <p data-testid="api-health" aria-live="polite">
-      <template v-if="health">API: {{ health.status }} · database: {{ health.db }}</template>
-      <template v-else-if="error">API unreachable ({{ error }})</template>
-      <template v-else>Checking API…</template>
-    </p>
-  </main>
+  <div class="page">
+    <p v-if="loading" class="notice">Loading building…</p>
+    <p v-else-if="error" class="notice error" role="alert">{{ error }}</p>
+
+    <template v-if="building">
+      <BuildingHeader
+        :name="building.name"
+        :capacity-w="building.capacityW"
+        :status="deviceStatus?.status ?? 'OFFLINE'"
+        :last-reading-at="deviceStatus?.lastReadingAt ?? null"
+        :connected="connected"
+      />
+
+      <main class="layout">
+        <div class="column area-controls">
+          <div class="panel">
+            <SimulatorControls @status="simulator = $event" />
+          </div>
+          <div class="panel">
+            <SplitModeToggle :model-value="building.splitMode" :save="setSplitMode" />
+          </div>
+        </div>
+        <div class="panel area-live">
+          <LiveFlow :reading="reading" />
+        </div>
+        <div class="panel area-bars">
+          <ApartmentBars :apartments="building.apartments" :reading="reading" />
+        </div>
+        <div class="panel area-summary">
+          <DailySummary
+            :building-id="building.id"
+            :date="summaryDate"
+            :reading-count="receivedCount"
+          />
+        </div>
+      </main>
+
+      <footer class="footer">
+        Independent demo with simulated data. Allocation model and figures are illustrative.
+      </footer>
+    </template>
+  </div>
 </template>
 
 <style scoped>
-.shell {
-  max-width: 72rem;
+.page {
+  max-width: 76rem;
   margin: 0 auto;
-  padding: calc(var(--space) * 2) var(--space);
+  padding: var(--space-5) var(--space-4) var(--space-4);
+}
+
+.notice {
+  color: var(--color-muted);
+}
+
+.notice.error {
+  color: var(--color-error);
+}
+
+/* One column on phones; two columns on tablets; three at 1200 px+ so the
+   controls, the live figures and the bars all sit above the fold at 1280×720. */
+.layout {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+  grid-template-areas: 'controls' 'live' 'bars' 'summary';
+  align-items: start;
+}
+
+.area-controls {
+  grid-area: controls;
+}
+
+.area-live {
+  grid-area: live;
+}
+
+.area-bars {
+  grid-area: bars;
+}
+
+.area-summary {
+  grid-area: summary;
+}
+
+.column {
+  display: grid;
+  gap: var(--space-4);
+  align-content: start;
+  min-width: 0;
+}
+
+.panel {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+@media (min-width: 60rem) {
+  .layout {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    grid-template-areas:
+      'controls bars'
+      'live bars'
+      'summary summary';
+  }
+}
+
+@media (min-width: 75rem) {
+  .layout {
+    grid-template-columns: minmax(0, 4fr) minmax(0, 4fr) minmax(0, 5fr);
+    grid-template-areas:
+      'controls live bars'
+      'summary summary summary';
+  }
+}
+
+.footer {
+  margin-top: var(--space-5);
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  text-align: center;
 }
 </style>
