@@ -1,0 +1,23 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.eslintcache
+
+# Secrets: only .env.example is committed
+.env
+.env.*
+!.env.example
+
+# Logs and OS / editor files
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Cypress artefacts
+web/cypress/videos/
+web/cypress/screenshots/

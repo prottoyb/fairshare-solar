@@ -1,0 +1,30 @@
+{
+  "name": "fairshare-solar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FairShare Solar: simulated shared-solar allocation demo (NestJS 11 + Vue 3 + PostgreSQL)",
+  "workspaces": [
+    "api",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"npm:dev -w api\" \"npm:dev -w web\"",
+    "db:migrate": "npm run db:migrate -w api",
+    "db:seed": "npm run db:seed -w api",
+    "db:setup": "npm run db:migrate && npm run db:seed",
+    "test": "npm run test -w api && npm run test:e2e -w api && npm run test:unit -w web -- --run --passWithNoTests",
+    "lint": "npm run lint -w api && npm run lint -w web",
+    "typecheck": "npm run typecheck -w api && npm run typecheck -w web",
+    "build": "npm run build -w api && npm run build -w web",
+    "e2e": "npm run test:e2e -w web"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6",
+    "cross-env": "^10.1.0",
+    "dotenv-cli": "^11.0.0",
+    "rimraf": "^6.1.3"
+  }
+}

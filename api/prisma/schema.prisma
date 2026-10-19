@@ -1,0 +1,9 @@
+// Models are added in M3 (see PROJECT_BRIEF.md §5.5).
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
