@@ -1,4 +1,3 @@
-// Models are added in M3 (see PROJECT_BRIEF.md §5.5).
 generator client {
   provider = "prisma-client-js"
 }
@@ -6,4 +5,70 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum SplitMode {
+  EQUAL
+  ENTITLEMENT
+}
+
+model Building {
+  id              String      @id @default(cuid())
+  name            String
+  capacityW       Int // PV system size in watts, e.g. 30000
+  splitMode       SplitMode   @default(EQUAL)
+  intervalMinutes Int         @default(5)
+  createdAt       DateTime    @default(now())
+  apartments      Apartment[]
+  readings        Reading[]
+}
+
+model Apartment {
+  id             String       @id @default(cuid())
+  buildingId     String
+  building       Building     @relation(fields: [buildingId], references: [id])
+  label          String // "Unit 1"
+  lotEntitlement Int // > 0
+  demands        Demand[]
+  allocations    Allocation[]
+
+  @@unique([buildingId, label])
+}
+
+model Reading {
+  id            String       @id @default(cuid())
+  buildingId    String
+  building      Building     @relation(fields: [buildingId], references: [id])
+  deviceId      String
+  intervalStart DateTime     @db.Timestamptz(3) // aligned to the interval, UTC
+  solarWh       Int
+  exportedWh    Int
+  splitModeUsed SplitMode // snapshot of the mode at this interval
+  payloadHash   String       @db.Char(64) // sha256 hex, for idempotency
+  receivedAt    DateTime     @default(now()) @db.Timestamptz(3)
+  demands       Demand[]
+  allocations   Allocation[]
+
+  @@unique([deviceId, intervalStart])
+  @@index([buildingId, intervalStart])
+}
+
+model Demand {
+  readingId   String
+  apartmentId String
+  demandWh    Int
+  reading     Reading   @relation(fields: [readingId], references: [id], onDelete: Cascade)
+  apartment   Apartment @relation(fields: [apartmentId], references: [id])
+
+  @@id([readingId, apartmentId])
+}
+
+model Allocation {
+  readingId   String
+  apartmentId String
+  allocatedWh Int
+  reading     Reading   @relation(fields: [readingId], references: [id], onDelete: Cascade)
+  apartment   Apartment @relation(fields: [apartmentId], references: [id])
+
+  @@id([readingId, apartmentId])
 }

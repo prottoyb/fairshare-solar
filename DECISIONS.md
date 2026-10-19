@@ -2,6 +2,14 @@
 
 Short records of the trade-offs made while building FairShare Solar. The numbered ADRs from the brief (§8) are filled in as each milestone lands; smaller build-time decisions are logged at the bottom.
 
+## ADR-001 Integer watt-hours everywhere
+
+**Context.** Every interval must add up exactly: allocated + exported = solar, to the watt-hour. Floating-point sums drift, for the same reason ledgers store money as integer cents.
+
+**Decision.** All stored energy is an `Int` number of watt-hours (`solarWh`, `exportedWh`, `demandWh`, `allocatedWh`), and the allocation engine uses integer maths only. Percentages are calculated only when a response is built. The database backs this up with `CHECK` constraints in migration `checks`: energy columns `>= 0`, and `capacityW` and `lotEntitlement` `> 0`.
+
+**Consequences.** Conservation can be asserted with `===` in tests. Bad data is refused by Postgres even if application validation is bypassed. Sub-Wh precision is lost, which is irrelevant at 5-minute building scale.
+
 ## ADR-002 Stack pins: NestJS 11 + Prisma 6 + TypeScript 5.9 on local PostgreSQL 17
 
 **Context.** On 2026-10-19 several npm `latest` tags would break a CommonJS NestJS + Jest project: NestJS 12 is ESM-first and defaults to Vitest, `prisma` installs an 8.0 release candidate, Prisma 7 needs driver adapters and `prisma.config.ts`, and TypeScript 7 is not supported by `ts-jest`.
@@ -29,3 +37,7 @@ Short records of the trade-offs made while building FairShare Solar. The numbere
 - **M2: `simulator/prng.ts` lands with the engine.** The engine's property tests need the seeded `mulberry32`, so the pure PRNG (plus `randInt`) and its spec are added now; the simulator itself follows in M5.
 - **M2: the engine refuses inputs that would break exact integer maths.** Besides the brief's `RangeError` checks, it throws when `max(solarWh, demandWh) × total weight` exceeds `Number.MAX_SAFE_INTEGER`. Ingest's bounds are far below this; the guard only protects other callers.
 - **README "How I used AI" note:** the I4 invariant test caught a rounding flaw in the specified algorithm before any code depended on it (see ADR-007).
+- **M3: e2e runs `prisma migrate deploy`, not `migrate reset`, on `fairshare_test`.** Prisma 6.19 refuses `migrate reset` when run by an AI agent unless the user consents for each run. Every e2e run already truncates all tables (`TRUNCATE … RESTART IDENTITY CASCADE`) and re-seeds in `beforeEach`, so applying pending migrations is enough. `npm run test:e2e:reset -w api` still does a full reset of the test DB by hand. The truncate helper refuses to run unless `DATABASE_URL` points at `fairshare_test`.
+- **M3: the seed looks up the building by name with `findFirst`, not `upsert`.** `Building.name` isn't unique in the §5.5 schema, and Prisma's `upsert` needs a unique key. Apartments are upserted by `(buildingId, label)`. Re-seeding keeps the building's current split mode. The demo data and upsert live in `prisma/demo-building.ts`, shared by the seed and the e2e reset. `prisma/` is excluded from the Nest build so `dist/main.js` stays at the root.
+- **M3: one HTTP setup for the app and the tests.** `src/app.setup.ts` (global prefix, ValidationPipe, shutdown hooks) is called by `main.ts` and by the e2e `createTestApp()`, so tests exercise the same pipeline as production.
+- **M3: `GET /api/buildings/:id` also returns `intervalMinutes`.** The dashboard needs the interval length, and it costs nothing to include.
