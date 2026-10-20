@@ -11,7 +11,7 @@ import {
 import { ReadingGenerator } from './reading-generator';
 
 const CAPACITY_W = 30000;
-const CAP_WH = 2500; // 30 kW × 5 min
+const CAP_WH = (CAPACITY_W * 5) / 60; // capacity × one 5-minute interval
 
 describe('solar profile', () => {
   it.each([0, 3, 5.99, 18.01, 21, 23.92])(
