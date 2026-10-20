@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReadingsService } from '../readings/readings.service';
 import { solarWhFromIrradiance } from './profiles';
-import { WeatherService } from '../weather/weather.service';
+import { IntervalWeather, WeatherService } from '../weather/weather.service';
 import { GeneratedReading } from './reading-generator';
 import { SimulatorService } from './simulator.service';
 
@@ -12,12 +12,15 @@ describe('SimulatorService (fake timers)', () => {
   const building = {
     id: 'b1',
     capacityW: 30000,
-    apartments: [{ id: 'a1' }, { id: 'a2' }],
+    apartments: [
+      { id: 'a1', lotEntitlement: 10 },
+      { id: 'a2', lotEntitlement: 30 },
+    ],
   };
   let latestReading: { intervalStart: Date } | null;
   let ingested: GeneratedReading[];
   let ingest: jest.Mock;
-  let irradianceForInterval: jest.Mock<Promise<number | null>, [Date, number]>;
+  let intervalWeather: jest.Mock<Promise<IntervalWeather>, [Date, number]>;
   let service: SimulatorService;
 
   beforeEach(() => {
@@ -35,13 +38,14 @@ describe('SimulatorService (fake timers)', () => {
       reading: { findFirst: jest.fn(() => Promise.resolve(latestReading)) },
     };
     const config = { get: () => '42' };
-    irradianceForInterval = jest.fn<Promise<number | null>, [Date, number]>(
-      () => Promise.resolve(null), // no weather: clear-sky fallback
+    intervalWeather = jest.fn<Promise<IntervalWeather>, [Date, number]>(
+      // no weather: clear-sky fallback, no heating/cooling
+      () => Promise.resolve({ irradianceWm2: null, temperatureC: null }),
     );
     service = new SimulatorService(
       prisma as unknown as PrismaService,
       { ingest } as unknown as ReadingsService,
-      { irradianceForInterval } as unknown as WeatherService,
+      { intervalWeather } as unknown as WeatherService,
       config as unknown as ConfigService,
     );
   });
@@ -63,10 +67,13 @@ describe('SimulatorService (fake timers)', () => {
   });
 
   it('takes solar from the weather for each interval', async () => {
-    irradianceForInterval.mockResolvedValue(1000);
+    intervalWeather.mockResolvedValue({
+      irradianceWm2: 1000,
+      temperatureC: 20,
+    });
     await service.start(1000);
     await jest.advanceTimersByTimeAsync(1000);
-    expect(irradianceForInterval).toHaveBeenCalledWith(
+    expect(intervalWeather).toHaveBeenCalledWith(
       new Date('2026-10-19T13:00:00.000Z'),
       5,
     );
@@ -179,7 +186,7 @@ describe('SimulatorService (fake timers)', () => {
     const empty = new SimulatorService(
       prisma as unknown as PrismaService,
       { ingest } as unknown as ReadingsService,
-      { irradianceForInterval } as unknown as WeatherService,
+      { intervalWeather } as unknown as WeatherService,
       { get: () => undefined } as unknown as ConfigService,
     );
     await expect(empty.start()).rejects.toBeInstanceOf(NotFoundException);

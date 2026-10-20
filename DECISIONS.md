@@ -86,6 +86,33 @@ If two inserts race, the loser's `P2002` unique-violation is caught, and the sam
 - An idle day can't be "replayed" against changed weather: the same interval reingested with a newer forecast gets a 409, which the simulator logs and skips (ADR-006).
 - Showing Open-Meteo data requires the attribution "Weather data: Open-Meteo.com (CC BY 4.0)", with a link.
 
+## ADR-009 Realistic, deterministic apartment demand
+
+**Context.** User testing on the dev database found four problems:
+- **Jumpy.** Each 5-minute value was a fixed curve times fresh ±20 % noise. Unit 1 went 294 → 379 → 366 → 326 Wh, about 14 % change per interval.
+- **Looping.** Every flat followed the same shape every day.
+- **About three times too high.** Flats used 28–37 kWh a day and 700–860 W all night.
+- **History-dependent.** Values depended on how many readings had come before.
+
+**Decision.** Demand is a pure function of (`SIM_SEED`, flat index, Melbourne local date, interval of the day), plus the outdoor temperature, in `profiles.ts` (`intervalDemandWh`):
+- **Household size from lot size:** entitlement 10 → 1 person, 15 → 2, 20 → 2, 30 → 3 (`PERSONS_BY_ENTITLEMENT`). Daily targets are 7 / 10 / 13 kWh for 1 / 2 / 3 people (`DAILY_KWH_BY_PERSONS`), so the demo building averages **9.5 kWh per flat per day**. **Benchmark:** CitiPower (inner-Melbourne distributor) reports an average of 9.9 kWh/day for units in 2025. That figure was supplied with the requirements and not independently re-checked here, and it is a check on the level, not the source of the shape.
+- **Shape:** one normalised 24-hour **illustrative typical residential load shape, not measured data**. It has a low overnight base (fridge and standby), a morning peak around 06:30–08:30, low weekday daytime use, and an evening peak around 17:30–21:30. A weekend variant has a later, smaller morning peak and more daytime use. Hourly fractions sit at hh:30 and are interpolated linearly, wrapping round midnight, so there is no step at the hour and the day still sums to 1.
+- **Different flats, different days:**
+  - each flat's routine is shifted by a seeded −45…+45 minutes;
+  - a daily multiplier of 0.85–1.15 per (flat, date);
+  - smooth noise from a mean-reverting AR(1) walk per flat-day (spread 8 %, persistence 0.92), with its daily mean removed so it reshapes the day without changing its total;
+  - appliance events in waking hours (06:30–22:30): +40–150 Wh per interval for 1–4 intervals, at a probability of 0.006 per interval.
+
+  The day's actual event energy comes out of the shape's budget, so a flat's day totals about target × multiplier.
+- **Determinism:** every draw comes from `mulberry32`, seeded with an FNV-1a hash of (seed, flat, date, stream). Noise and events are generated for the whole local day and memoised. An interval's value never depends on how many readings came before, so a restart, the seed and the simulator produce identical values, and re-runs replay instead of 409.
+- **Heating and cooling** (weather-linked). `temperature_2m` is added to the Open-Meteo request and the saved fixture. It is an *instantaneous* value at the stamped time, unlike radiation's preceding-hour mean, so it is interpolated between timestamps to the interval midpoint. In waking hours (06:00–23:00), 40 W per °C below 16 °C and 60 W per °C above 26 °C are added, capped at 600 W. In fallback (no temperature), nothing is added.
+
+**Consequences.**
+- Each flat stays within ±20 % of its target, and the building averages 8–12 kWh/day: tested over two weeks of dates without weather. The median interval-to-interval change is under 6 %, flats peak at different times, and weekends differ from weekdays (all tested).
+- Heating and cooling add energy above the target on cold or hot days, as real homes do. The ±20 % test is run without weather.
+- The clear-sky solar fallback's cloud walk now has the generator's PRNG to itself, so its random sequence differs from before. Its formula is unchanged.
+- The fixture now combines two real Open-Meteo responses for 18–26 October 2026: the original forecast, plus `temperature_2m` requested later for the same dates with `start_date`/`end_date`. The merge checked that the hourly timestamps match exactly.
+
 ## Build-time decisions
 
 - **M1: web toolchain versions come from `create-vue@3.24.0` as generated.** It scaffolded Vue 3.5, Vite 8, **Vitest 4.1** (the spec expected 5) and **TypeScript 6.0** in `web`. The TypeScript-below-7 rule only matters for the API (ts-jest), and vue-tsc 3.3 supports TS 6, so the scaffold's versions are kept rather than hand-editing them. API stays on TypeScript 5.9.3.
@@ -151,3 +178,5 @@ If two inserts race, the loser's `P2002` unique-violation is caught, and the sam
 - **W3: `WeatherCard`** sits under "This interval" in the middle column, so at 1280×720 everything the video needs stays above the fold. It shows sunrise, sunset, "Sunshine X h of Y h daylight", and the hour mean containing the interval on screen. It says plainly when the source is the clear-sky fallback, and always shows the CC BY 4.0 attribution with links. Covered by 4 Vitest tests (mocked `fetch`).
 - **W3: `docs/dashboard.png` was retaken.** The old one showed UTC times and the old building name. The new one is 17:20 AEDT on a simulated 21 October in Entitlement mode with real weather: 223 Wh shared 22/22/34/33/45/67 Wh. It was captured with a one-off Cypress spec that was not committed.
 - **W3: the simulator's "Stopped." hint no longer says "Simulated data only"**, because solar is now an estimate from real weather.
+- **D1: realistic demand (ADR-009).** The old `baseDemandWh` / `demandWh` and their tests are replaced by `intervalDemandWh` and `demand.spec.ts` (18 tests covering every target in the requirements). `ReadingGenerator` now takes `{ id, lotEntitlement }` per flat and `{ irradianceWm2, temperatureC }` per interval. `WeatherService.intervalWeather()` returns both from the same cache entry (nulls in fallback). The simulator and the seed use it.
+- **D1: a first version failed the ±20 % test on one flat-day (79 % of target).** The noise could drift below zero over a whole day, and a day without appliance events fell under the shape budget reserved for them. Rather than loosen the test, the noise is now mean-zero per day, and the day's actual event energy comes out of the budget. The daily total then follows the multiplier, as designed.

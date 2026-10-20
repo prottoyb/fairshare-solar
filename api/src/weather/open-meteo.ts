@@ -8,7 +8,7 @@ import { SITE } from '../common/site';
 export const OPEN_METEO_URL =
   'https://api.open-meteo.com/v1/forecast' +
   `?latitude=${SITE.latitude}&longitude=${SITE.longitude}` +
-  '&hourly=shortwave_radiation,cloud_cover' +
+  '&hourly=shortwave_radiation,cloud_cover,temperature_2m' +
   '&daily=sunrise,sunset,sunshine_duration,daylight_duration' +
   `&timezone=${encodeURIComponent(SITE.timeZone)}` +
   '&timeformat=unixtime&past_days=2&forecast_days=7';
@@ -18,6 +18,8 @@ export type HourlyWeather = {
   endsAt: number;
   irradianceWm2: number; // shortwave_radiation: mean of the preceding hour
   cloudCoverPct: number;
+  /** temperature_2m: instantaneous at `endsAt` (not an hour mean), °C; null if absent. */
+  temperatureC: number | null;
 };
 
 export type DailyWeather = {
@@ -39,6 +41,7 @@ type Raw = {
     time?: unknown;
     shortwave_radiation?: unknown;
     cloud_cover?: unknown;
+    temperature_2m?: unknown;
   };
   daily?: {
     time?: unknown;
@@ -76,6 +79,11 @@ export function parseOpenMeteo(json: unknown, timeZone: string): Forecast {
     'hourly.shortwave_radiation',
   );
   const hCloud = numbers(raw.hourly?.cloud_cover, 'hourly.cloud_cover');
+  // Optional: a response without temperature means no heating/cooling load.
+  const hTemp =
+    raw.hourly?.temperature_2m === undefined
+      ? []
+      : numbers(raw.hourly.temperature_2m, 'hourly.temperature_2m');
   const hourly: HourlyWeather[] = [];
   hTime.forEach((t, i) => {
     const wm2 = hRad[i];
@@ -85,6 +93,7 @@ export function parseOpenMeteo(json: unknown, timeZone: string): Forecast {
       endsAt: t * 1000,
       irradianceWm2: Math.max(0, wm2),
       cloudCoverPct: cloud ?? 0,
+      temperatureC: hTemp[i] ?? null,
     });
   });
   hourly.sort((a, b) => a.endsAt - b.endsAt);

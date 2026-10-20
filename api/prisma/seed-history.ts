@@ -42,12 +42,15 @@ export async function seedHistory(
     where: { id: buildingId },
     select: {
       capacityW: true,
-      apartments: { select: { id: true }, orderBy: { label: 'asc' } },
+      apartments: {
+        select: { id: true, lotEntitlement: true },
+        orderBy: { label: 'asc' },
+      },
     },
   });
   const generator = new ReadingGenerator(
     seed,
-    building.apartments.map((a) => a.id),
+    building.apartments,
     building.capacityW,
     SIM_DEVICE_ID,
     SITE.timeZone,
@@ -63,12 +66,9 @@ export async function seedHistory(
     fallbackIntervals: 0,
   };
   for (let at = start; at < end; at = addMinutes(at, INTERVAL_MINUTES)) {
-    const irradiance = await weather.irradianceForInterval(
-      at,
-      INTERVAL_MINUTES,
-    );
-    if (irradiance === null) result.fallbackIntervals++;
-    const dto = generator.next(at, irradiance);
+    const intervalWeather = await weather.intervalWeather(at, INTERVAL_MINUTES);
+    if (intervalWeather.irradianceWm2 === null) result.fallbackIntervals++;
+    const dto = generator.next(at, intervalWeather);
     try {
       const stored = await readings.ingest(buildingId, dto);
       if (stored.replayed) result.replayed++;
