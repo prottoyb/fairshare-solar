@@ -9,7 +9,7 @@
 ## 1. Product
 
 - **Name:** FairShare Solar
-- **One-line pitch:** A small full-stack app that takes simulated telemetry from one apartment building's shared solar system, splits each 5-minute interval of solar energy fairly between the apartments, stores it in PostgreSQL, and streams the result live to a Vue 3 dashboard.
+- **One-line pitch:** A small full-stack app for one apartment building's shared solar system in Fawkner VIC (Melbourne). It estimates each 5-minute interval's solar from real public weather data (Open-Meteo), simulates apartment demand, splits the solar fairly between the apartments, stores it in PostgreSQL, and streams the result live to a Vue 3 dashboard (ADR-008).
 - **Success looks like:** you start the simulator and watch the live dashboard:
   - solar generation rises through a compressed day;
   - each apartment's bar fills with its allocated energy;
@@ -23,7 +23,8 @@
 ### Independence and branding rules (must be followed and stated in the README)
 - This is an **independent demo**. It uses **no third-party code, data, branding or logos**, and it is not affiliated with or endorsed by any company.
 - No third-party company or product names appear in the UI, code, package names or repo name. The **only** exception is the README's "Why I built this" section.
-- The allocation algorithm is the **author's own simplified model**, not any commercial product's. All data is **simulated**.
+- The allocation algorithm is the **author's own simplified model**, not any commercial product's. Apartment demand is **simulated**. Solar is an **estimate from public weather data** (Open-Meteo, CC BY 4.0, attributed in the UI and README), not a real meter.
+- The building's location is given at **suburb centre only**, never a street address.
 
 ---
 
@@ -36,7 +37,7 @@ There's one user: a viewer of the dashboard (such as a building manager). **No a
 ## 3. Core journeys
 
 **J1 — Watch a live day**
-1. Open `http://localhost:5173`. The dashboard shows "Demo Building A", 6 apartments and a device status of **Offline**.
+1. Open `http://localhost:5173`. The dashboard shows "Prottoy's Apartment", 6 apartments, the weather in Fawkner and a device status of **Offline**.
 2. Click **Start simulator**. Every 2 seconds a new 5-minute interval arrives over WebSocket.
 3. The solar figure, each apartment's allocated vs demand bar, the exported figure and the daily summary all update without reloading the page.
 
@@ -144,7 +145,8 @@ FairShare-Demo/
       readings/   (module, controller, service, dto/, payload-hash.ts)
       simulator/  (module, controller, service, profiles.ts, prng.ts + specs)
       live/       (live.gateway.ts, device-status.service.ts, device-status.ts + spec)
-      common/     (time.ts: interval alignment and UTC-day helpers + spec)
+      common/     (time.ts, local-time.ts, site.ts, limits.ts + specs)
+      weather/    (module, controller, service, provider, open-meteo.ts, __fixtures__/ + specs)
       health/     (health.controller.ts)
     test/         (*.e2e-spec.ts, jest-e2e.json, utils/reset-db.ts)
   web/
@@ -253,11 +255,12 @@ model Allocation {
 - **All energy is stored as integer watt-hours. No floats in stored energy** (ADR-001). Percentages are only calculated when a response is sent.
 
 ### 5.6 Seed data
-- Building: **"Demo Building A"**, `capacityW: 30000`, EQUAL, 5-minute interval.
+- Building: **"Prottoy's Apartment"**, `capacityW: 10000` (about 1.7 kW per apartment, so real weather produces shortfalls; 833 Wh cap per interval), EQUAL, 5-minute interval.
+- Location (in `api/src/common/site.ts`, suburb centre only): **Fawkner VIC 3060**, lat −37.707, lon 144.968, time zone **Australia/Melbourne**.
 - 6 apartments: "Unit 1"–"Unit 6" with lot entitlements **10, 10, 15, 15, 20, 30**.
 - Device id: `"sim-device-001"`.
 - The seed is **idempotent**: upsert by building name / `(buildingId, label)`.
-- **F12 history:** the seed boots Nest with `NestFactory.createApplicationContext(AppModule)`. It generates **yesterday (UTC)**, 288 intervals, using the simulator's profile functions and calls `ReadingsService.ingest()` for each, so it uses the one validated path. Then it closes the context. Re-running the seed results in replays, not duplicates.
+- **F12 history:** the seed boots Nest with `NestFactory.createApplicationContext(AppModule)`. It generates **yesterday as a Melbourne local day** (288 intervals, or 276 / 300 on daylight-saving days), with solar from `WeatherService` (§6.2) and demand from the simulator's profile functions, and calls `ReadingsService.ingest()` for each, so it uses the one validated path. It logs how many intervals used the clear-sky fallback. Then it closes the context. Re-running the seed results in replays, not duplicates.
 
 ### 5.7 API (global prefix `api`; JSON only; port 3000)
 
@@ -276,7 +279,8 @@ Errors use Nest's default `{ statusCode, message, error }` shape.
 | PATCH | `/api/buildings/:id` | `{ splitMode: "EQUAL" \| "ENTITLEMENT" }` | 200; 400; 404 |
 | POST | `/api/buildings/:id/readings` | below | 201 new; 200 replay; 400; 404; 409 |
 | GET | `/api/buildings/:id/readings?limit=50` | int 1–288, default 50 | 200, newest first, with allocations; 404 |
-| GET | `/api/buildings/:id/summary?date=YYYY-MM-DD` | required UTC date | 200; 400; 404 |
+| GET | `/api/buildings/:id/summary?date=YYYY-MM-DD` | required Melbourne local date | 200; 400; 404 |
+| GET | `/api/weather?date=YYYY-MM-DD` | required Melbourne local date | 200 `{ date, location, source: "open-meteo" \| "fallback", sunrise, sunset, daylightHours, sunshineHours, hourly: [{ start, end, irradianceWm2, cloudCoverPct }] }`; 400 |
 | POST | `/api/simulator/start` | `{ speedMs?: int 500–10000 }`, default 2000 | 200 status |
 | POST | `/api/simulator/stop` | – | 200 status |
 | GET | `/api/simulator/status` | – | 200 `{ running, speedMs, buildingId, simulatedTime }` |
@@ -294,7 +298,7 @@ Errors use Nest's default `{ statusCode, message, error }` shape.
 1. **DTO** (ValidationPipe): integers, `solarWh ≥ 0`, `0 ≤ demandWh ≤ 10000`. Otherwise 400.
 2. **Alignment** (in the service): `intervalStart` minutes divisible by the interval, with seconds = 0 and ms = 0. Otherwise 400 `"intervalStart must align to a 5-minute boundary"`. Future times are **allowed**, because the simulator's clock runs ahead of real time.
 3. **Building exists.** Otherwise 404.
-4. **Capacity:** `solarWh ≤ capacityW × intervalMinutes / 60` (2500 for the demo building). Otherwise 400.
+4. **Capacity:** `solarWh ≤ capacityW × intervalMinutes / 60` (833 for the demo building). Otherwise 400.
 5. **Apartment set:** `demands` has exactly one entry per apartment of that building, with no missing, unknown or duplicate ids. Otherwise 400 naming the offending id(s).
 
 **Idempotency:**
@@ -387,20 +391,22 @@ Plus a **seeded property test**: 1,000 random cases from `mulberry32` (no extra 
 
 ### 6.2 Simulator
 - `prng.ts`: `mulberry32(seed)` returning floats in `[0,1)`. Seed from `SIM_SEED` (default 42).
-- **Simulated clock (UTC):** on start, begin at the interval after the latest stored reading for the device. If there is none, begin at **today 00:00 UTC**. Each tick moves forward 5 minutes. This avoids 409s after a restart.
+- **Simulated clock:** `intervalStart` is stored in UTC. On start, begin at the interval after the latest stored reading for the device. If there is none, begin at **today 00:00 Melbourne local time**. Each tick moves forward 5 minutes. This avoids 409s after a restart.
+- **Local time** (`common/local-time.ts`, `Intl.DateTimeFormat`, no date library): demand bumps, the simulator's start, the seed's "yesterday" and the daily summary all use the **Australia/Melbourne** local day and hour. A local day is 288 intervals, 276 on the day daylight saving starts (e.g. 2026-10-04) and 300 on the day it ends (e.g. 2026-04-05).
 - **Tick:** every `speedMs` real ms (default 2000; 288 ticks ≈ 9.6 min per simulated day).
   - `start` while running with a new `speedMs` restarts the timer at the new speed.
   - `start` with the same speed does nothing.
   - `stop` clears the timer.
   - Clear timers in `onModuleDestroy`.
   - Never let two ticks overlap: skip a tick if the previous `ingest` hasn't finished.
-- **Solar** (`profiles.ts`, pure). Treat the UTC hour as "local" for the demo; say so in the README.
-  - `h` = fractional hour.
-  - `clearSky = (6 ≤ h ≤ 18) ? sin(π (h − 6) / 12) : 0`.
-  - `cloud = 0.7 × prevCloud + 0.3 × (0.6 + 0.4 × prng())`, starting from 1.
-  - `solarWh = clamp(round(capacityW × clearSky × cloud × 5 / 60), 0, capacityW × 5 / 60)`.
-- **Demand** per apartment: a fixed base of 40–80 Wh (drawn once per apartment from the PRNG), plus a morning bump (6–9h, +150 Wh peak) and an evening bump (17–22h, +300 Wh peak), with ±20 % noise. Clamp to `[0, 10000]` and round.
-- Each tick builds the **same `CreateReadingDto`** and calls `ReadingsService.ingest(buildingId, dto)`. Log and continue on errors; never crash the timer.
+- **Solar from real weather** (ADR-008). The source is the Open-Meteo forecast API (free, no key, CC BY 4.0, Node's built-in `fetch`), queried for the site's coordinates with `hourly=shortwave_radiation,cloud_cover`, `daily=sunrise,sunset,sunshine_duration,daylight_duration`, `timezone=Australia/Melbourne`, `timeformat=unixtime`, `past_days=2` and `forecast_days=7`.
+  - Hourly `shortwave_radiation` (W/m²) is the **mean of the preceding hour**, so each value sits at the middle of its hour (a value stamped 13:00 is placed at 12:30). It is interpolated linearly to the **midpoint** of each 5-minute interval.
+  - `solarWh = clamp(round(capacityW × irradiance / 1000 × 0.8 × 5 / 60), 0, capacityW × 5 / 60)`. 0.8 is the performance ratio (`PERFORMANCE_RATIO`, `profiles.ts`, pure).
+  - `WeatherService` caches one response per local date in memory: past dates forever, today and future dates for 1 hour. After a failed fetch it waits 60 s before retrying, and concurrent callers share one fetch.
+  - **Fallback:** if the API fails or the date is outside the response, `WeatherService` logs one warning (Nest `Logger`) and the generator uses the previous clear-sky curve, so the simulator never stops. In that curve `h` is the local fractional hour, `clearSky = (6 ≤ h ≤ 18) ? sin(π (h − 6) / 12) : 0`, and `cloud = 0.7 × prevCloud + 0.3 × (0.6 + 0.4 × prng())`, starting from 1.
+  - **Tests never call the network.** Unit tests parse one saved real response (`api/src/weather/__fixtures__/`); e2e tests replace the weather provider with a fake through Nest's testing module.
+- **Demand** per apartment (still simulated): a fixed base of 40–80 Wh (drawn once per apartment from the PRNG), plus a morning bump (6–9h local, +150 Wh peak) and an evening bump (17–22h local, +300 Wh peak), with ±20 % noise. Clamp to `[0, 10000]` and round. The PRNG advances the same way with or without weather, so demand doesn't depend on the weather source.
+- Each tick asks `WeatherService` for the interval's irradiance, builds the **same `CreateReadingDto`**, and calls `ReadingsService.ingest(buildingId, dto)`. Log and continue on errors; never crash the timer.
 
 ### 6.3 Device status / stale detection
 - Pure function `computeStatus(lastReadingAt: number | null, now: number, thresholdMs: number): 'OFFLINE' | 'ONLINE' | 'STALE'` in `device-status.ts`.
@@ -420,7 +426,7 @@ server: {
 ```
 The web app calls relative URLs (`/api/...`) and `io()` with no URL.
 
-**Which date the summary uses:** use the **simulated date** (the UTC date of the latest reading's `intervalStart`, or `simulatedTime` from `/simulator/status`), **not** the browser's date. The simulated clock runs ahead of real time.
+**Which date the summary and weather use:** use the **simulated date**, meaning the Melbourne local date of the latest reading's `intervalStart` (or of `simulatedTime` from `/simulator/status`), **not** the browser's date. The simulated clock runs ahead of real time. All times on screen are Melbourne local time with the zone (e.g. "06:30 AEDT").
 
 | Component | Shows | Notes |
 |---|---|---|
@@ -430,6 +436,7 @@ The web app calls relative URLs (`/api/...`) and `io()` with no URL.
 | `ApartmentBars` | Per unit: label, entitlement, allocated vs demand bar, numbers in Wh | Bar is a styled `<div role="meter" aria-valuemin="0" :aria-valuemax="demandWh" :aria-valuenow="allocatedWh" :aria-label="…">` **plus** visible numbers. No chart library |
 | `DailySummary` | `/summary` table for the simulated date | Refetches every 10 readings and when the date changes, plus a manual refresh button. Real `<table>`, `<th scope>`, `<caption>` |
 | `SimulatorControls` | Start / Stop, speed select (1 s / 2 s / 5 s) | Buttons disabled while a request is in flight. `data-testid="sim-start"` / `"sim-stop"` |
+| `WeatherCard` | "Weather in Fawkner": sunrise and sunset, "Sunshine X h of Y h daylight", this hour's cloud cover and sunlight (W/m²) from `/api/weather` for the simulated date | Says so when the source is `fallback`. Always shows "Weather data: Open-Meteo.com (CC BY 4.0)" with links |
 
 - **Composables:**
   - `useLive()`: one socket per app; reactive `connected`, `latestReading`, `deviceStatus`, `recentReadings` (ring buffer of 50). Shows "Reconnecting…" while disconnected. Disconnects in `onUnmounted`.
@@ -438,7 +445,7 @@ The web app calls relative URLs (`/api/...`) and `io()` with no URL.
 - **Styling:** plain CSS with custom properties. Clean, light, generous spacing. Solar yellow `#F5B700` for allocated, slate `#475569` for demand, text contrast ≥ 4.5:1. Must look tidy at 1280×720 and 375 px wide.
 
 ### 6.5 Summary query
-- Build the UTC day range `[date 00:00Z, next day 00:00Z)`.
+- Build the Melbourne local day range `[date 00:00 local, next day 00:00 local)` as UTC instants (§6.2 "Local time").
 - Use Prisma `aggregate` on `Reading` (`_sum` of solarWh and exportedWh, `_count`).
 - Use `groupBy({ by: ['apartmentId'], where: { reading: { buildingId, intervalStart: { gte, lt } } }, _sum: … })` on `Allocation` and `Demand`.
 - If a relation filter in `groupBy` misbehaves, use `$queryRaw` with a **tagged template** (parameterised). **Never `$queryRawUnsafe`.**
@@ -450,7 +457,8 @@ The web app calls relative URLs (`/api/...`) and `io()` with no URL.
 | Layer | Tool | Must cover |
 |---|---|---|
 | Engine | Jest | 7 worked examples, I1–I6, the 1,000-case property test, every `RangeError` case |
-| Time helpers | Jest | Alignment accepts `…:05:00.000Z` and rejects `…:03:00Z` and `…:05:01Z`; UTC day bounds |
+| Time helpers | Jest | Alignment accepts `…:05:00.000Z` and rejects `…:03:00Z` and `…:05:01Z`; Melbourne local day bounds, incl. 276 intervals on 2026-10-04 and 300 on 2026-04-05 |
+| Weather | Jest | Irradiance → Wh and interpolation; the Open-Meteo parser on the saved response; `WeatherService` cache, fallback and retry with a fake provider and clock (no network) |
 | Device status | Jest (+ fake timers for the service) | OFFLINE → ONLINE → STALE → ONLINE; emits only on change |
 | Profiles | Jest | Solar is 0 at night and ≤ the cap at noon; demand stays in bounds; the same seed gives the same sequence |
 | API e2e | Jest + Supertest on `fairshare_test` (reset by the script in §5.4; tables truncated in `beforeEach` with `TRUNCATE … RESTART IDENTITY CASCADE` and a re-seeded building) | 201 stores rows and the response adds up; 200 replay writes nothing (row count unchanged); 409 conflict; 400 for misaligned time, missing / unknown / duplicate apartment, float or negative Wh, solar over capacity, unknown fields; 404 unknown building; PATCH changes **only later** readings' `splitModeUsed`; summary matches hand-calculated totals for 2 known readings; the DB `CHECK` rejects a negative value inserted directly |

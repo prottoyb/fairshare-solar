@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { formatUtcDate, formatUtcTime, formatWh } from '@/format'
+import { formatSiteDate, formatSiteTime, formatWh } from '@/format'
 import type { ReadingResult } from '@/types'
 
 const props = defineProps<{ reading: ReadingResult | null }>()
@@ -17,8 +17,8 @@ const allocatedWh = computed(
       <p v-if="!reading" class="empty">Waiting for first reading…</p>
       <template v-else>
         <p class="when">
-          <span class="time">{{ formatUtcTime(reading.intervalStart) }}</span>
-          <span class="date">{{ formatUtcDate(reading.intervalStart) }} · simulated</span>
+          <span class="time">{{ formatSiteTime(reading.intervalStart) }}</span>
+          <span class="date">{{ formatSiteDate(reading.intervalStart) }} · simulated</span>
         </p>
         <dl class="figures">
           <div class="figure solar">

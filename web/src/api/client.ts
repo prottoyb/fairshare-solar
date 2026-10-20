@@ -5,6 +5,7 @@ import type {
   ReadingResult,
   SimulatorStatus,
   SplitMode,
+  WeatherDay,
 } from '@/types'
 
 /** A non-2xx response, with the API's own message when it sent one. */
@@ -58,6 +59,8 @@ export const api = {
     request<DailySummary>(
       `/api/buildings/${encodeURIComponent(id)}/summary?date=${encodeURIComponent(date)}`,
     ),
+
+  weather: (date: string) => request<WeatherDay>(`/api/weather?date=${encodeURIComponent(date)}`),
 
   simulatorStatus: () => request<SimulatorStatus>('/api/simulator/status'),
 

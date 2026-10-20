@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { ref, shallowRef, watch } from 'vue'
 import { api, errorMessage } from '@/api/client'
-import { formatPct, formatUtcDate, formatWh } from '@/format'
+import { formatDateLabel, formatPct, formatWh } from '@/format'
 import type { DailySummary } from '@/types'
 
 const props = defineProps<{
   buildingId: string
-  /** Simulated UTC date (YYYY-MM-DD), not the browser's date. */
+  /** Simulated Melbourne local date (YYYY-MM-DD), not the browser's date. */
   date: string | null
   /** Readings received so far; the summary refetches every 10. */
   readingCount: number
@@ -56,7 +56,7 @@ watch(
       <dl class="totals">
         <div>
           <dt>Intervals</dt>
-          <dd>{{ summary.building.intervals }} / 288</dd>
+          <dd>{{ summary.building.intervals }}</dd>
         </div>
         <div>
           <dt>Solar</dt>
@@ -81,9 +81,9 @@ watch(
           <caption>
             Per apartment for
             {{
-              formatUtcDate(summary.date)
+              formatDateLabel(summary.date)
             }}
-            (UTC, simulated day)
+            (Melbourne local day, simulated)
           </caption>
           <thead>
             <tr>

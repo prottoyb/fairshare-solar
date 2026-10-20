@@ -77,3 +77,16 @@ export type SimulatorStatus = {
   buildingId: string | null
   simulatedTime: string | null
 }
+
+/** `GET /api/weather?date=` for a Melbourne local date (ADR-008). */
+export type WeatherDay = {
+  date: string
+  location: { name: string; latitude: number; longitude: number; timezone: string }
+  source: 'open-meteo' | 'fallback'
+  sunrise: string | null
+  sunset: string | null
+  daylightHours: number | null
+  sunshineHours: number | null
+  /** Hour means over [start, end). */
+  hourly: { start: string; end: string; irradianceWm2: number; cloudCoverPct: number }[]
+}

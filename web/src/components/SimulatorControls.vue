@@ -72,11 +72,7 @@ function onSpeedChange(): void {
       </label>
     </div>
     <p class="state" aria-live="polite">
-      {{
-        running
-          ? `Running: one 5-minute interval every ${speedMs / 1000} s`
-          : 'Stopped. Simulated data only.'
-      }}
+      {{ running ? `Running: one 5-minute interval every ${speedMs / 1000} s` : 'Stopped.' }}
     </p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
   </section>

@@ -7,8 +7,10 @@ import DailySummary from '@/components/DailySummary.vue'
 import LiveFlow from '@/components/LiveFlow.vue'
 import SimulatorControls from '@/components/SimulatorControls.vue'
 import SplitModeToggle from '@/components/SplitModeToggle.vue'
+import WeatherCard from '@/components/WeatherCard.vue'
 import { useBuilding } from '@/composables/useBuilding'
 import { useLive } from '@/composables/useLive'
+import { siteDateString } from '@/format'
 import type { ReadingResult, SimulatorStatus } from '@/types'
 
 const { building, loading, error, setSplitMode } = useBuilding()
@@ -33,13 +35,12 @@ watch(
 
 const reading = computed(() => latestReading.value ?? storedReading.value)
 
-// The summary follows the simulated clock, which runs ahead of real time.
-const summaryDate = computed(
-  () =>
-    reading.value?.intervalStart.slice(0, 10) ??
-    simulator.value?.simulatedTime?.slice(0, 10) ??
-    null,
-)
+// The summary and weather follow the simulated clock (which runs ahead of real
+// time), as a Melbourne local date.
+const summaryDate = computed(() => {
+  const at = reading.value?.intervalStart ?? simulator.value?.simulatedTime
+  return at ? siteDateString(at) : null
+})
 </script>
 
 <template>
@@ -65,8 +66,13 @@ const summaryDate = computed(
             <SplitModeToggle :model-value="building.splitMode" :save="setSplitMode" />
           </div>
         </div>
-        <div class="panel area-live">
-          <LiveFlow :reading="reading" />
+        <div class="column area-live">
+          <div class="panel">
+            <LiveFlow :reading="reading" />
+          </div>
+          <div class="panel">
+            <WeatherCard :date="summaryDate" :at="reading?.intervalStart ?? null" />
+          </div>
         </div>
         <div class="panel area-bars">
           <ApartmentBars :apartments="building.apartments" :reading="reading" />
@@ -81,7 +87,8 @@ const summaryDate = computed(
       </main>
 
       <footer class="footer">
-        Independent demo with simulated data. Allocation model and figures are illustrative.
+        Independent demo. Solar is estimated from real weather for Fawkner; apartment demand is
+        simulated. Allocation model and figures are illustrative.
       </footer>
     </template>
   </div>
