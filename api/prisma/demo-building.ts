@@ -1,9 +1,12 @@
 import { PrismaClient, SplitMode } from '@prisma/client';
 
-/** Seed data from SPEC.md §5.6. */
+/**
+ * Seed data from SPEC.md §5.6. The building is in Fawkner VIC (common/site.ts).
+ * 10 kW ≈ 1.7 kW per apartment, so real weather produces shortfalls (ADR-008).
+ */
 export const DEMO_BUILDING = {
-  name: 'Demo Building A',
-  capacityW: 30000,
+  name: "Prottoy's Apartment",
+  capacityW: 10_000,
   splitMode: SplitMode.EQUAL,
   intervalMinutes: 5,
 } as const;

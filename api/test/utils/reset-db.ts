@@ -13,7 +13,7 @@ function assertTestDatabase(): void {
   }
 }
 
-/** Empty every table and re-seed Demo Building A. Returns the building id. */
+/** Empty every table and re-seed the demo building. Returns the building id. */
 export async function resetDb(prisma: PrismaClient): Promise<string> {
   assertTestDatabase();
   await prisma.$executeRaw`TRUNCATE "Allocation", "Demand", "Reading", "Apartment", "Building" RESTART IDENTITY CASCADE`;

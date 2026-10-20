@@ -51,13 +51,26 @@ export function readingBody(
   return {
     deviceId: 'sim-device-001',
     intervalStart: '2026-10-20T03:05:00.000Z',
-    solarWh: 1000,
+    solarWh: 800, // under the 10 kW building's 833 Wh cap; 200 Wh surplus at 6 × 100
+
     demands: apartments.map((a, i) => ({
       apartmentId: a.id,
       demandWh: demandWh?.[i] ?? 100,
     })),
     ...rest,
   };
+}
+
+/** The building's solar cap for one interval: capacityW × minutes / 60, floored. */
+export async function maxSolarWhFor(
+  prisma: PrismaClient,
+  buildingId: string,
+): Promise<number> {
+  const b = await prisma.building.findUniqueOrThrow({
+    where: { id: buildingId },
+    select: { capacityW: true, intervalMinutes: true },
+  });
+  return Math.floor((b.capacityW * b.intervalMinutes) / 60);
 }
 
 export async function rowCounts(prisma: PrismaClient): Promise<{

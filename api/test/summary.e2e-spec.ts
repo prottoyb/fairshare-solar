@@ -66,11 +66,11 @@ describe('Summary (e2e)', () => {
       solarWh: 600,
       demandWh: [50, 100, 100, 100, 100, 200],
     });
-    // B: solar 1000, demands 100 each (600) → 100 each, export 400.
-    await ingest({ intervalStart: '2026-10-20T03:05:00Z', solarWh: 1000 });
-    // Outside the UTC day on both sides: must be ignored.
-    await ingest({ intervalStart: '2026-10-19T23:55:00Z', solarWh: 2000 });
-    await ingest({ intervalStart: '2026-10-21T00:00:00Z', solarWh: 2000 });
+    // B: solar 800, demands 100 each (600) → 100 each, export 200.
+    await ingest({ intervalStart: '2026-10-20T03:05:00Z', solarWh: 800 });
+    // Just outside the Melbourne local day (AEDT, UTC+11) on both sides: ignored.
+    await ingest({ intervalStart: '2026-10-19T12:55:00Z', solarWh: 800 }); // 23:55 on the 19th
+    await ingest({ intervalStart: '2026-10-20T13:00:00Z', solarWh: 800 }); // 00:00 on the 21st
 
     const res = await summary('2026-10-20').expect(200);
     const body = res.body as Summary;
@@ -78,11 +78,11 @@ describe('Summary (e2e)', () => {
     expect(body.date).toBe('2026-10-20');
     expect(body.building).toEqual({
       intervals: 2,
-      solarWh: 1600,
+      solarWh: 1400,
       allocatedWh: 1200,
-      exportedWh: 400,
+      exportedWh: 200,
       demandWh: 1250,
-      solarUsedPct: 75, // 1200 / 1600
+      solarUsedPct: 85.7, // 1200 / 1400
     });
     const row = (label: string) =>
       body.apartments.find((a) => a.label === label);
@@ -112,6 +112,17 @@ describe('Summary (e2e)', () => {
       allocatedWh: 250,
       selfSufficiencyPct: 83.3, // 250 / 300
       shareOfSolarPct: 20.8, // 250 / 1200
+    });
+  });
+
+  it('uses the Melbourne local day, so a UTC-midnight reading counts on the local day', async () => {
+    // 00:00 local on the 20th is 13:00 UTC on the 19th; 23:55 local is 12:55 UTC.
+    await ingest({ intervalStart: '2026-10-19T13:00:00Z', solarWh: 100 });
+    await ingest({ intervalStart: '2026-10-20T12:55:00Z', solarWh: 100 });
+    const body = (await summary('2026-10-20').expect(200)).body as Summary;
+    expect(body.building.intervals).toBe(2);
+    expect((await summary('2026-10-19').expect(200)).body).toMatchObject({
+      building: { intervals: 0 },
     });
   });
 

@@ -2,6 +2,8 @@ import { NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReadingsService } from '../readings/readings.service';
+import { solarWhFromIrradiance } from './profiles';
+import { WeatherService } from '../weather/weather.service';
 import { GeneratedReading } from './reading-generator';
 import { SimulatorService } from './simulator.service';
 
@@ -15,6 +17,7 @@ describe('SimulatorService (fake timers)', () => {
   let latestReading: { intervalStart: Date } | null;
   let ingested: GeneratedReading[];
   let ingest: jest.Mock;
+  let irradianceForInterval: jest.Mock<Promise<number | null>, [Date, number]>;
   let service: SimulatorService;
 
   beforeEach(() => {
@@ -32,9 +35,13 @@ describe('SimulatorService (fake timers)', () => {
       reading: { findFirst: jest.fn(() => Promise.resolve(latestReading)) },
     };
     const config = { get: () => '42' };
+    irradianceForInterval = jest.fn<Promise<number | null>, [Date, number]>(
+      () => Promise.resolve(null), // no weather: clear-sky fallback
+    );
     service = new SimulatorService(
       prisma as unknown as PrismaService,
       { ingest } as unknown as ReadingsService,
+      { irradianceForInterval } as unknown as WeatherService,
       config as unknown as ConfigService,
     );
   });
@@ -55,18 +62,30 @@ describe('SimulatorService (fake timers)', () => {
     });
   });
 
-  it('starts at today 00:00 UTC when the device has no readings', async () => {
+  it('takes solar from the weather for each interval', async () => {
+    irradianceForInterval.mockResolvedValue(1000);
+    await service.start(1000);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(irradianceForInterval).toHaveBeenCalledWith(
+      new Date('2026-10-19T13:00:00.000Z'),
+      5,
+    );
+    expect(ingested[0].solarWh).toBe(solarWhFromIrradiance(30000, 1000, 5));
+  });
+
+  it('starts at today 00:00 Melbourne time when the device has no readings', async () => {
+    // NOW is 19:17 AEDT on 20 October; local midnight was 13:00 UTC on the 19th.
     const status = await service.start();
     expect(status).toMatchObject({
       running: true,
       speedMs: 2000,
-      simulatedTime: '2026-10-20T00:00:00.000Z',
+      simulatedTime: '2026-10-19T13:00:00.000Z',
     });
     await jest.advanceTimersByTimeAsync(6000);
     expect(times()).toEqual([
-      '2026-10-20T00:00:00.000Z',
-      '2026-10-20T00:05:00.000Z',
-      '2026-10-20T00:10:00.000Z',
+      '2026-10-19T13:00:00.000Z',
+      '2026-10-19T13:05:00.000Z',
+      '2026-10-19T13:10:00.000Z',
     ]);
     expect(ingest).toHaveBeenCalledWith('b1', expect.any(Object));
   });
@@ -93,9 +112,9 @@ describe('SimulatorService (fake timers)', () => {
     expect(status).toMatchObject({ running: true, speedMs: 500 });
     await jest.advanceTimersByTimeAsync(1000);
     expect(times()).toEqual([
-      '2026-10-20T00:00:00.000Z',
-      '2026-10-20T00:05:00.000Z',
-      '2026-10-20T00:10:00.000Z',
+      '2026-10-19T13:00:00.000Z',
+      '2026-10-19T13:05:00.000Z',
+      '2026-10-19T13:10:00.000Z',
     ]);
   });
 
@@ -122,8 +141,8 @@ describe('SimulatorService (fake timers)', () => {
     finish();
     await jest.advanceTimersByTimeAsync(500);
     expect(times()).toEqual([
-      '2026-10-20T00:00:00.000Z',
-      '2026-10-20T00:05:00.000Z',
+      '2026-10-19T13:00:00.000Z',
+      '2026-10-19T13:05:00.000Z',
     ]);
   });
 
@@ -141,7 +160,7 @@ describe('SimulatorService (fake timers)', () => {
     expect(ingest).toHaveBeenCalledTimes(3);
     expect(await service.status()).toMatchObject({
       running: true,
-      simulatedTime: '2026-10-20T00:15:00.000Z',
+      simulatedTime: '2026-10-19T13:15:00.000Z',
     });
   });
 
@@ -160,6 +179,7 @@ describe('SimulatorService (fake timers)', () => {
     const empty = new SimulatorService(
       prisma as unknown as PrismaService,
       { ingest } as unknown as ReadingsService,
+      { irradianceForInterval } as unknown as WeatherService,
       { get: () => undefined } as unknown as ConfigService,
     );
     await expect(empty.start()).rejects.toBeInstanceOf(NotFoundException);

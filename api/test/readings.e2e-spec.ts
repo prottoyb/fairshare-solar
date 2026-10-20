@@ -7,6 +7,7 @@ import { createTestApp } from './utils/create-app';
 import {
   Apt,
   apartmentsOf,
+  maxSolarWhFor,
   readingBody,
   ReadingResponse,
   rowCounts,
@@ -60,8 +61,8 @@ describe('Readings (e2e)', () => {
       expect(body).toMatchObject({
         buildingId,
         intervalStart: '2026-10-20T03:05:00.000Z',
-        solarWh: 1000,
-        exportedWh: 400,
+        solarWh: 800,
+        exportedWh: 200,
         splitModeUsed: 'EQUAL',
         replayed: false,
       });
@@ -88,8 +89,8 @@ describe('Readings (e2e)', () => {
       expect(stored).toMatchObject({
         buildingId,
         deviceId: 'sim-device-001',
-        solarWh: 1000,
-        exportedWh: 400,
+        solarWh: 800,
+        exportedWh: 200,
         splitModeUsed: 'EQUAL',
       });
       expect(stored.payloadHash).toMatch(/^[0-9a-f]{64}$/);
@@ -123,7 +124,7 @@ describe('Readings (e2e)', () => {
 
       it('409 when the same interval arrives with different numbers', async () => {
         await post(readingBody(apts)).expect(201);
-        const res = await post(readingBody(apts, { solarWh: 999 })).expect(409);
+        const res = await post(readingBody(apts, { solarWh: 799 })).expect(409);
         expect(res.body).toEqual({
           statusCode: 409,
           error: 'Conflict',
@@ -280,12 +281,18 @@ describe('Readings (e2e)', () => {
       });
 
       it('accepts solar exactly at capacity for one interval', async () => {
-        // 30 kW × 5 min = 2,500 Wh.
-        await post(readingBody(apts, { solarWh: 2500 })).expect(201);
+        // capacityW × 5 min, from the seeded building (833 Wh at 10 kW).
+        const max = await maxSolarWhFor(prisma, buildingId);
+        await post(readingBody(apts, { solarWh: max })).expect(201);
       });
 
-      it('rejects solar over the building capacity for one interval', () =>
-        expect400(readingBody(apts, { solarWh: 2501 }), /2501.*2500/));
+      it('rejects solar over the building capacity for one interval', async () => {
+        const max = await maxSolarWhFor(prisma, buildingId);
+        await expect400(
+          readingBody(apts, { solarWh: max + 1 }),
+          new RegExp(`${max + 1}.*${max}`),
+        );
+      });
 
       it('rejects empty demands', () =>
         expect400(
@@ -314,10 +321,13 @@ describe('Readings (e2e)', () => {
       });
 
       it('checks capacity before the apartment set (§5.7 order)', async () => {
-        const body = readingBody(apts, { solarWh: 2501 });
+        const max = await maxSolarWhFor(prisma, buildingId);
+        const body = readingBody(apts, { solarWh: max + 1 });
         body.demands.pop();
         const res = await post(body).expect(400);
-        expect((res.body as { message: string }).message).toMatch(/2500/);
+        expect((res.body as { message: string }).message).toMatch(
+          new RegExp(`maximum of ${max} Wh`),
+        );
       });
     });
 

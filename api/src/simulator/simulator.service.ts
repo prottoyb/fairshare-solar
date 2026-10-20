@@ -6,9 +6,12 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { INTERVAL_MINUTES } from '../common/limits';
-import { addMinutes, startOfUtcDay } from '../common/time';
+import { startOfLocalDay } from '../common/local-time';
+import { SITE } from '../common/site';
+import { addMinutes } from '../common/time';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReadingsService } from '../readings/readings.service';
+import { WeatherService } from '../weather/weather.service';
 import { ReadingGenerator } from './reading-generator';
 import {
   DEFAULT_SIM_SEED,
@@ -44,6 +47,7 @@ export class SimulatorService implements OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly readings: ReadingsService,
+    private readonly weather: WeatherService,
     config: ConfigService,
   ) {
     const seed = Number(config.get<string>('SIM_SEED'));
@@ -100,7 +104,8 @@ export class SimulatorService implements OnModuleDestroy {
 
   /**
    * Finds the building and sets the simulated clock to the interval after the
-   * device's latest stored reading, or today 00:00 UTC, so a restart never 409s.
+   * device's latest stored reading, or today 00:00 Melbourne time, so a restart
+   * never 409s.
    */
   private async prepare(): Promise<void> {
     const building = await this.prisma.building.findFirst({
@@ -122,6 +127,7 @@ export class SimulatorService implements OnModuleDestroy {
         building.apartments.map((a) => a.id),
         building.capacityW,
         SIM_DEVICE_ID,
+        SITE.timeZone,
       );
     }
     this.buildingId = building.id;
@@ -133,7 +139,7 @@ export class SimulatorService implements OnModuleDestroy {
     });
     this.clock = latest
       ? addMinutes(latest.intervalStart, INTERVAL_MINUTES)
-      : startOfUtcDay(new Date());
+      : startOfLocalDay(new Date(), SITE.timeZone);
   }
 
   private async tick(): Promise<void> {
@@ -141,7 +147,15 @@ export class SimulatorService implements OnModuleDestroy {
     this.busy = true;
     const at = this.clock;
     try {
-      await this.readings.ingest(this.buildingId, this.generator.next(at));
+      // Real irradiance for this interval, or null → clear-sky fallback (ADR-008).
+      const irradiance = await this.weather.irradianceForInterval(
+        at,
+        INTERVAL_MINUTES,
+      );
+      await this.readings.ingest(
+        this.buildingId,
+        this.generator.next(at, irradiance),
+      );
     } catch (err) {
       // Never let one bad interval stop the timer.
       this.logger.warn(

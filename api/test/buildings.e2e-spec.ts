@@ -33,9 +33,9 @@ describe('Buildings (e2e)', () => {
       expect(res.body).toEqual([
         {
           id: buildingId,
-          name: 'Demo Building A',
+          name: "Prottoy's Apartment",
           splitMode: 'EQUAL',
-          capacityW: 30000,
+          capacityW: 10000,
         },
       ]);
     });
@@ -46,8 +46,8 @@ describe('Buildings (e2e)', () => {
       const res = await http().get(`/api/buildings/${buildingId}`).expect(200);
       expect(res.body).toMatchObject({
         id: buildingId,
-        name: 'Demo Building A',
-        capacityW: 30000,
+        name: "Prottoy's Apartment",
+        capacityW: 10000,
         splitMode: 'EQUAL',
         intervalMinutes: 5,
       });
@@ -109,7 +109,7 @@ describe('Buildings (e2e)', () => {
         where: { id: buildingId },
       });
       expect(stored).toMatchObject({
-        name: 'Demo Building A',
+        name: "Prottoy's Apartment",
         splitMode: 'EQUAL',
       });
     });

@@ -1,12 +1,17 @@
+import { localDayRange } from '../common/local-time';
 import { isAlignedToInterval } from '../common/time';
+import { loadOpenMeteoFixture } from '../weather/__fixtures__/load-fixture';
+import { parseOpenMeteo } from '../weather/open-meteo';
 import { mulberry32 } from './prng';
 import {
   baseDemandWh,
   clearSky,
   demandWh,
+  intervalIrradiance,
   maxSolarWh,
   nextCloud,
   solarWh,
+  solarWhFromIrradiance,
 } from './profiles';
 import { ReadingGenerator } from './reading-generator';
 
@@ -87,16 +92,70 @@ describe('demand profile', () => {
 });
 
 describe('ReadingGenerator', () => {
+  const MEL = 'Australia/Melbourne';
   const apartments = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'];
+  // One Melbourne local day (20 October 2026), 288 intervals from local midnight.
+  const { start } = localDayRange('2026-10-20', MEL);
   const day = Array.from(
     { length: 288 },
-    (_, i) => new Date(Date.UTC(2026, 9, 20, 0, i * 5)),
+    (_, i) => new Date(start.getTime() + i * 5 * 60_000),
   );
+  // Real irradiance for that day from the saved Open-Meteo response.
+  const series = parseOpenMeteo(loadOpenMeteoFixture(), MEL).hourly.map(
+    (h) => ({ endsAt: h.endsAt, wm2: h.irradianceWm2 }),
+  );
+  const realWeather = (t: Date) => intervalIrradiance(series, t, 5);
 
-  function runDay(seed: number) {
-    const gen = new ReadingGenerator(seed, apartments, CAPACITY_W, 'dev-1');
-    return day.map((t) => gen.next(t));
+  function runDay(
+    seed: number,
+    weather: (t: Date) => number | null = () => null,
+  ) {
+    const gen = new ReadingGenerator(
+      seed,
+      apartments,
+      CAPACITY_W,
+      'dev-1',
+      MEL,
+    );
+    return day.map((t) => gen.next(t, weather(t)));
   }
+
+  it('gives the same sequence for the same seed and weather', () => {
+    expect(runDay(42, realWeather)).toEqual(runDay(42, realWeather));
+  });
+
+  it('takes solar from the irradiance input', () => {
+    const gen = new ReadingGenerator(42, apartments, CAPACITY_W, 'dev-1', MEL);
+    expect(gen.next(day[144], 1000).solarWh).toBe(
+      solarWhFromIrradiance(CAPACITY_W, 1000, 5),
+    );
+    expect(gen.next(day[145], 0).solarWh).toBe(0);
+  });
+
+  it('simulates the same demand whether or not weather is available', () => {
+    const withWeather = runDay(42, realWeather).map((r) => r.demands);
+    const fallback = runDay(42).map((r) => r.demands);
+    expect(withWeather).toEqual(fallback);
+  });
+
+  it('puts the evening demand bump in the local evening', () => {
+    const readings = runDay(42);
+    const total = (h: number) =>
+      readings[h * 12].demands.reduce((s, d) => s + d.demandWh, 0);
+    expect(total(19.5)).toBeGreaterThan(total(3) * 2); // 19:30 vs 03:00 local
+  });
+
+  it('follows the real weather: dark at night, generating at midday', () => {
+    const readings = runDay(42, realWeather);
+    const at = (h: number) => readings[h * 12];
+    expect(at(2).solarWh).toBe(0); // 02:00 local
+    expect(at(22).solarWh).toBe(0); // 22:00 local
+    // 12:00–12:05 local: about 803 W/m² (see the WeatherService test).
+    expect(at(12).solarWh).toBe(
+      solarWhFromIrradiance(CAPACITY_W, realWeather(day[144])!, 5),
+    );
+    expect(at(12).solarWh).toBeGreaterThan(0);
+  });
 
   it('gives the same sequence for the same seed', () => {
     expect(runDay(42)).toEqual(runDay(42));
@@ -122,7 +181,7 @@ describe('ReadingGenerator', () => {
     }
   });
 
-  it('makes a plausible day: dark at night, generating around noon', () => {
+  it('falls back to a plausible clear-sky day: dark at night, generating around noon', () => {
     const readings = runDay(42);
     const at = (h: number) => readings[h * 12];
     expect(at(2).solarWh).toBe(0);

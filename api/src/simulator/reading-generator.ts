@@ -1,7 +1,13 @@
 import { INTERVAL_MINUTES } from '../common/limits';
-import { utcHourOfDay } from '../common/time';
+import { localHourOfDay } from '../common/local-time';
 import { mulberry32 } from './prng';
-import { baseDemandWh, demandWh, nextCloud, solarWh } from './profiles';
+import {
+  baseDemandWh,
+  demandWh,
+  nextCloud,
+  solarWh,
+  solarWhFromIrradiance,
+} from './profiles';
 
 /** Same shape as CreateReadingDto, so it goes through the one ingest path. */
 export type GeneratedReading = {
@@ -12,9 +18,12 @@ export type GeneratedReading = {
 };
 
 /**
- * Seeded, deterministic source of simulated readings for one building. The same
- * seed, apartments and interval sequence always give the same readings. Used by
- * the simulator and by the seed's history (ADR-004). Pure: no framework imports.
+ * Seeded, deterministic source of simulated readings for one building. Solar
+ * comes from the irradiance passed in (real weather, ADR-008), or from the
+ * clear-sky curve when that is null. Demand is simulated from the site's local
+ * hour. The same seed, apartments, intervals and weather input always give the
+ * same readings. Used by the simulator and the seed's history (ADR-004).
+ * Pure: no framework imports.
  */
 export class ReadingGenerator {
   private readonly rng: () => number;
@@ -27,6 +36,7 @@ export class ReadingGenerator {
     private readonly apartmentIds: string[],
     private readonly capacityW: number,
     private readonly deviceId: string,
+    private readonly timeZone: string,
   ) {
     this.rng = mulberry32(seed);
     this.baseByApartment = new Map(
@@ -34,13 +44,25 @@ export class ReadingGenerator {
     );
   }
 
-  next(intervalStart: Date): GeneratedReading {
-    const hour = utcHourOfDay(intervalStart);
+  /**
+   * @param irradianceWm2 mean irradiance for this interval, or null to use the
+   * clear-sky fallback. The PRNG advances the same way either way, so demand
+   * never depends on whether weather was available.
+   */
+  next(intervalStart: Date, irradianceWm2: number | null): GeneratedReading {
+    const hour = localHourOfDay(intervalStart, this.timeZone);
     this.cloud = nextCloud(this.cloud, this.rng());
     return {
       deviceId: this.deviceId,
       intervalStart: intervalStart.toISOString(),
-      solarWh: solarWh(this.capacityW, hour, this.cloud, INTERVAL_MINUTES),
+      solarWh:
+        irradianceWm2 === null
+          ? solarWh(this.capacityW, hour, this.cloud, INTERVAL_MINUTES)
+          : solarWhFromIrradiance(
+              this.capacityW,
+              irradianceWm2,
+              INTERVAL_MINUTES,
+            ),
       demands: this.apartmentIds.map((id) => ({
         apartmentId: id,
         demandWh: demandWh(this.baseByApartment.get(id)!, hour, this.rng()),
