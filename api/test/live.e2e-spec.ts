@@ -107,67 +107,81 @@ describe('Live events, simulator API and seed history (e2e)', () => {
 
   describe('seed history (F12)', () => {
     const now = new Date('2026-10-20T09:00:00.000Z');
+    // 288 sequential ingests through the real path exceed Jest's 5 s default on CI runners.
+    const SEED_TIMEOUT_MS = 30_000;
 
-    it("stores yesterday's 288 intervals through ingest, and replays on re-run", async () => {
-      const readings = app.get(ReadingsService);
+    it(
+      "stores yesterday's 288 intervals through ingest, and replays on re-run",
+      async () => {
+        const readings = app.get(ReadingsService);
 
-      const first = await seedHistory(prisma, readings, buildingId, 42, now);
-      expect(first).toEqual({
-        date: '2026-10-19',
-        created: 288,
-        replayed: 0,
-        conflicts: 0,
-      });
-      const counts = await rowCounts(prisma);
-      expect(counts).toEqual({
-        readings: 288,
-        demands: 288 * 6,
-        allocations: 288 * 6,
-      });
+        const first = await seedHistory(prisma, readings, buildingId, 42, now);
+        expect(first).toEqual({
+          date: '2026-10-19',
+          created: 288,
+          replayed: 0,
+          conflicts: 0,
+        });
+        const counts = await rowCounts(prisma);
+        expect(counts).toEqual({
+          readings: 288,
+          demands: 288 * 6,
+          allocations: 288 * 6,
+        });
 
-      const again = await seedHistory(prisma, readings, buildingId, 42, now);
-      expect(again).toMatchObject({ created: 0, replayed: 288, conflicts: 0 });
-      expect(await rowCounts(prisma)).toEqual(counts);
+        const again = await seedHistory(prisma, readings, buildingId, 42, now);
+        expect(again).toMatchObject({
+          created: 0,
+          replayed: 288,
+          conflicts: 0,
+        });
+        expect(await rowCounts(prisma)).toEqual(counts);
 
-      // The summary for that day adds up to the watt-hour.
-      const summary = (
-        await http()
-          .get(`/api/buildings/${buildingId}/summary?date=2026-10-19`)
-          .expect(200)
-      ).body as {
-        building: {
-          intervals: number;
-          solarWh: number;
-          allocatedWh: number;
-          exportedWh: number;
+        // The summary for that day adds up to the watt-hour.
+        const summary = (
+          await http()
+            .get(`/api/buildings/${buildingId}/summary?date=2026-10-19`)
+            .expect(200)
+        ).body as {
+          building: {
+            intervals: number;
+            solarWh: number;
+            allocatedWh: number;
+            exportedWh: number;
+          };
         };
-      };
-      expect(summary.building.intervals).toBe(288);
-      expect(summary.building.solarWh).toBeGreaterThan(0);
-      expect(summary.building.allocatedWh + summary.building.exportedWh).toBe(
-        summary.building.solarWh,
-      );
-    });
+        expect(summary.building.intervals).toBe(288);
+        expect(summary.building.solarWh).toBeGreaterThan(0);
+        expect(summary.building.allocatedWh + summary.building.exportedWh).toBe(
+          summary.building.solarWh,
+        );
+      },
+      SEED_TIMEOUT_MS,
+    );
 
-    it('counts a conflicting interval instead of failing', async () => {
-      // Different simulator data already stored for yesterday 00:00.
-      await http()
-        .post(`/api/buildings/${buildingId}/readings`)
-        .send(
-          readingBody(apts, {
-            intervalStart: '2026-10-19T00:00:00.000Z',
-            solarWh: 7,
-          }),
-        )
-        .expect(201);
-      const result = await seedHistory(
-        prisma,
-        app.get(ReadingsService),
-        buildingId,
-        42,
-        now,
-      );
-      expect(result).toMatchObject({ created: 287, conflicts: 1 });
-    });
+    it(
+      'counts a conflicting interval instead of failing',
+      async () => {
+        // Different simulator data already stored for yesterday 00:00.
+        await http()
+          .post(`/api/buildings/${buildingId}/readings`)
+          .send(
+            readingBody(apts, {
+              intervalStart: '2026-10-19T00:00:00.000Z',
+              solarWh: 7,
+            }),
+          )
+          .expect(201);
+        const result = await seedHistory(
+          prisma,
+          app.get(ReadingsService),
+          buildingId,
+          42,
+          now,
+        );
+        expect(result).toMatchObject({ created: 287, conflicts: 1 });
+      },
+      SEED_TIMEOUT_MS,
+    );
   });
 });
