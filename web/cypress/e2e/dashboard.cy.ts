@@ -16,7 +16,8 @@ describe('FairShare Solar dashboard', () => {
 
   it('goes live, applies the split mode from the next interval, and goes stale when stopped', () => {
     cy.visit('/')
-    cy.contains('h1', 'Demo Building A')
+    cy.contains('h1', "Prottoy's Apartment")
+    cy.contains('h2', 'Weather in Fawkner')
 
     // Start from a device that is not already online (a previous run may have
     // left it ONLINE for up to 3 intervals after stopping).

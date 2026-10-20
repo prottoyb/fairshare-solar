@@ -1,7 +1,7 @@
 /**
  * Solar and demand profiles for the simulator (SPEC.md §6.2). Pure: no framework
- * imports, no clock, no randomness of their own. Random draws are passed in.
- * The UTC hour is treated as "local" time for the demo.
+ * imports, no clock, no randomness of their own. Random draws and weather are
+ * passed in. Hours are the site's local hours (ADR-008).
  */
 import { MAX_DEMAND_WH } from '../common/limits';
 
@@ -35,6 +35,68 @@ export function solarWh(
     (capacityW * clearSky(hour) * cloud * intervalMinutes) / 60,
   );
   return clamp(wh, 0, maxSolarWh(capacityW, intervalMinutes));
+}
+
+/**
+ * Share of the panels' rated output that reaches the building after inverter,
+ * wiring, temperature and soiling losses. 0.8 is a typical rooftop value (ADR-008).
+ */
+export const PERFORMANCE_RATIO = 0.8;
+
+/**
+ * Solar energy for one interval from measured/forecast irradiance (W/m² on a
+ * horizontal surface): capacity × irradiance / 1000 × PR × minutes / 60, whole Wh,
+ * clamped to [0, the interval cap]. Irradiance already includes cloud.
+ */
+export function solarWhFromIrradiance(
+  capacityW: number,
+  irradianceWm2: number,
+  intervalMinutes: number,
+): number {
+  const wh = Math.round(
+    (((capacityW * irradianceWm2) / 1000) *
+      PERFORMANCE_RATIO *
+      intervalMinutes) /
+      60,
+  );
+  return clamp(wh, 0, maxSolarWh(capacityW, intervalMinutes));
+}
+
+/** One hourly value: the mean irradiance over the hour that ends at `endsAt` (ms). */
+export type HourlyIrradiance = { endsAt: number; wm2: number };
+
+const HOUR_MS = 3_600_000;
+
+/**
+ * Irradiance at instant `at` (ms), interpolated linearly between hour means placed
+ * at the centre of their hour (half past the previous hour). `series` must be sorted
+ * by `endsAt`. Null outside the series' range.
+ */
+export function irradianceAt(
+  series: HourlyIrradiance[],
+  at: number,
+): number | null {
+  const centre = (p: HourlyIrradiance) => p.endsAt - HOUR_MS / 2;
+  for (let i = 0; i < series.length; i++) {
+    const c = centre(series[i]);
+    if (at === c) return series[i].wm2;
+    if (at < c) {
+      if (i === 0) return null;
+      const prev = series[i - 1];
+      const c0 = centre(prev);
+      return prev.wm2 + ((series[i].wm2 - prev.wm2) * (at - c0)) / (c - c0);
+    }
+  }
+  return null;
+}
+
+/** Irradiance for the interval starting at `start`, sampled at its midpoint. */
+export function intervalIrradiance(
+  series: HourlyIrradiance[],
+  start: Date,
+  intervalMinutes: number,
+): number | null {
+  return irradianceAt(series, start.getTime() + (intervalMinutes * 60_000) / 2);
 }
 
 /** An apartment's fixed base load, 40–80 Wh per interval. */

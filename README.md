@@ -1,18 +1,18 @@
 # FairShare Solar
 
-A small full-stack app that takes simulated telemetry from one apartment building's shared rooftop solar system, splits each 5-minute interval of solar energy fairly between the apartments, stores it in PostgreSQL, and streams the result live to a Vue 3 dashboard. Every interval adds up exactly, to the watt-hour.
+A small full-stack app for one apartment building's shared rooftop solar system in Fawkner, Melbourne. Solar for each 5-minute interval is estimated from real public weather data; apartment demand is simulated. The app splits the solar fairly between the apartments, stores it in PostgreSQL, and streams the result live to a Vue 3 dashboard. Every interval adds up exactly, to the watt-hour.
 
 **NestJS 11 · Prisma 6 · PostgreSQL 17 · Socket.IO · Vue 3.5 · Jest · Vitest · Cypress**
 
-![FairShare Solar dashboard: six apartments sharing scarce morning solar by lot entitlement](docs/dashboard.png)
+![FairShare Solar dashboard: six apartments sharing scarce evening solar by lot entitlement, with Fawkner weather](docs/dashboard.png)
 
-*Above: 07:05 simulated, "By lot entitlement" mode. Solar is scarce, so each apartment's share follows its entitlement (10/10/15/15/20/30 → 56/56/84/84/112/167 Wh).*
+*Above: 17:20 AEDT on a simulated 21 October, "By lot entitlement" mode, with that day's real Fawkner weather. Solar is scarce (223 Wh against 701 Wh of demand), so each apartment's share follows its entitlement (10/10/15/15/20/30 → 22/22/34/33/45/67 Wh).*
 
 ## Why I built this
 
 I'm applying for the Full Stack Software Engineer role at **Allume Energy**. Allume's **SolShare** shares one rooftop solar system between the apartments in a building, and the role works across NestJS, Vue 3, PostgreSQL and fleets of connected devices. I wanted to show that I can work in that stack on a problem shaped like theirs: device telemetry in, a fair and exact split, stored safely, streamed live, and tested properly.
 
-> **Disclaimer.** This is an independent demo. It is not affiliated with or endorsed by Allume Energy, and it uses no Allume code, data, branding or logos. The allocation algorithm is my own simplified model, not Allume's, and all data is simulated.
+> **Disclaimer.** This is an independent demo. It is not affiliated with or endorsed by Allume Energy, and it uses no Allume code, data, branding or logos. The allocation algorithm is my own simplified model, not Allume's. Apartment demand is simulated, and solar is an estimate from public weather data, not a real meter.
 
 ## Quick start (Windows PowerShell)
 
@@ -41,16 +41,19 @@ npm.cmd run db:setup
 npm.cmd run dev
 ```
 
-Open **http://localhost:5173**. `db:setup` applies the migrations and seeds *Demo Building A* (30 kW, six apartments) plus yesterday's 288 simulated intervals. Click **Start simulator**: one 5-minute interval arrives every 2 s (1 s and 5 s are selectable), and a simulated day takes about 10 minutes at the default speed.
+Open **http://localhost:5173**. `db:setup` applies the migrations and seeds *Prottoy's Apartment* (10 kW, six apartments) plus yesterday's simulated intervals, with solar from yesterday's real Fawkner weather. Seeding needs internet access for the weather; without it, that day uses a clear-sky estimate. Click **Start simulator**: one 5-minute interval arrives every 2 s (1 s and 5 s are selectable), and a simulated day takes about 10 minutes at the default speed.
 
-> Simulated time is **UTC, treated as local time** for the demo: the sun rises at 06:00 UTC. The simulated clock runs ahead of real time.
+> All times are **Melbourne local time** (AEDT/AEST); readings are stored in UTC. The simulated clock starts at local midnight and runs ahead of real time, so after about a week of simulated days it runs past the 7-day forecast and solar falls back to a clear-sky estimate.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  SIM["Simulator<br/>(setInterval, seeded)"] --> ING
-  SEED["Seed: yesterday's<br/>288 intervals"] --> ING
+  OM["Open-Meteo forecast<br/>(irradiance, cloud)"] --> WX["WeatherService<br/>(cache, fallback)"]
+  WX --> SIM
+  WX --> SEED
+  SIM["Simulator<br/>(setInterval, seeded demand)"] --> ING
+  SEED["Seed: yesterday<br/>(Melbourne day)"] --> ING
   DEV["Device / curl<br/>POST /api/buildings/:id/readings"] --> ING
   ING["ReadingsService.ingest()<br/>validate → allocate → store"] -->|one transaction| PG[(PostgreSQL 17)]
   ING -->|after commit| BUS["LiveEvents<br/>(RxJS Subject)"]
@@ -58,7 +61,7 @@ flowchart LR
   BUS --> GW["Socket.IO gateway"]
   STATUS --> GW
   GW -->|reading, device-status| VUE["Vue 3 dashboard"]
-  VUE -->|"REST /api (Vite proxy)"| REST["Buildings, readings,<br/>summary, simulator"]
+  VUE -->|"REST /api (Vite proxy)"| REST["Buildings, readings,<br/>summary, simulator, weather"]
   REST --> PG
 ```
 
@@ -67,9 +70,16 @@ flowchart LR
 - **Split mode applies from the next interval** (ADR-003): each reading stores the `splitModeUsed`, so history never changes.
 - **Integers everywhere** (ADR-001): energy is integer Wh, with database `CHECK` constraints behind the validation.
 - **Live**: the `reading` event is emitted only after commit and never for replays. `device-status` is emitted only when the status changes, and sent to each client as it connects.
-- **Daily summary**: totals come from Postgres `aggregate` / `groupBy` over the UTC day; percentages are rounded to 1 decimal only in the response.
+- **Daily summary**: totals come from Postgres `aggregate` / `groupBy` over the Melbourne local day (288 intervals, or 276 / 300 on daylight-saving days); percentages are rounded to 1 decimal only in the response.
 
-Specification: [SPEC.md](SPEC.md). Decisions and trade-offs: [DECISIONS.md](DECISIONS.md) (7 ADRs plus a build log). On-call: [RUNBOOK.md](RUNBOOK.md).
+Specification: [SPEC.md](SPEC.md). Decisions and trade-offs: [DECISIONS.md](DECISIONS.md) (8 ADRs plus a build log). On-call: [RUNBOOK.md](RUNBOOK.md).
+
+## Data
+
+- **Location:** Fawkner VIC 3060, at the suburb centre (−37.707, 144.968), never a street address. Time zone Australia/Melbourne.
+- **Solar is estimated from real weather.** The API asks the free [Open-Meteo](https://open-meteo.com/) forecast API (no key) for hourly shortwave radiation (W/m², the mean of the *preceding* hour) and cloud cover, plus sunrise, sunset, sunshine and daylight. Each hour mean sits at the middle of its hour and is interpolated to the middle of every 5-minute interval. Then `solar Wh = 10 kW × irradiance / 1000 × 0.8 × 5/60`, where 0.8 is a typical performance ratio for inverter, wiring, heat and dirt losses. Responses are cached in memory per local date. If Open-Meteo is unreachable or a date is outside the forecast, solar falls back to a clear-sky curve, and `GET /api/weather` and the dashboard say so ([ADR-008](DECISIONS.md)).
+- **Apartment demand is simulated**: a seeded base load plus morning and evening bumps on the Melbourne local hour.
+- **Attribution:** Weather data: [Open-Meteo.com](https://open-meteo.com/) ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). The dashboard shows the same attribution next to the weather.
 
 ## Allocation model
 
@@ -86,15 +96,15 @@ Invariants, each with a test:
 | I5 | Deterministic, and independent of input order |
 | I6 | Every output is a whole number ≥ 0 |
 
-When solar exceeds demand, both modes give the same result, because everyone is fully supplied. The modes only differ while solar is scarce (early morning and late afternoon in the simulated day).
+When solar exceeds demand, both modes give the same result, because everyone is fully supplied. The modes only differ while solar is scarce. With 10 kW and recent Fawkner weather, that's roughly 07:30–09:00 and 17:05–18:30 local time, and it depends on the day's cloud.
 
 ## Testing
 
 | Layer | Command | Covers |
 |---|---|---|
-| API unit (Jest, 100) | `npm.cmd run test -w api` | Allocation engine: 7 worked examples, I1–I6, 2 × 1,000 seeded property cases, every `RangeError`. Time helpers, payload hash, solar/demand profiles, reading generator, stale logic and simulator (fake timers) |
-| API e2e (Jest + Supertest, 75) | `npm.cmd run test:e2e -w api` | Against `fairshare_test`: 201 / 200 replay / 409 / concurrent races / forced `P2002`, every 400 case, 404s, split-mode snapshot, hand-calculated summary, DB `CHECK`s, live event bus, simulator validation, seed history replay |
-| Web unit (Vitest, 9) | `npm.cmd run test:unit -w web -- --run` | `ApartmentBars` meters and aria values; `SplitModeToggle` PATCH, revert on error (mocked `fetch`) |
+| API unit (Jest, 148) | `npm.cmd run test -w api` | Allocation engine: 7 worked examples, I1–I6, 2 × 1,000 seeded property cases, every `RangeError`. Time helpers including Melbourne local days and the daylight-saving days (276 and 300 intervals). Irradiance → Wh model and interpolation. Open-Meteo parser on a saved real response. Weather cache, fallback and retry (fake provider and clock). Payload hash, profiles, reading generator, stale logic and simulator (fake timers) |
+| API e2e (Jest + Supertest, 83) | `npm.cmd run test:e2e -w api` | Against `fairshare_test`, with a **fake weather provider** (never the network): 201 / 200 replay / 409 / concurrent races / forced `P2002`, every 400 case, 404s, capacity from the building, split-mode snapshot, hand-calculated Melbourne-day summary, DB `CHECK`s, live event bus, simulator validation, seed history on real (saved) weather, `GET /api/weather` incl. fallback |
+| Web unit (Vitest, 13) | `npm.cmd run test:unit -w web -- --run` | `ApartmentBars` meters and aria values; `SplitModeToggle` PATCH, revert on error; `WeatherCard` Melbourne times, this hour, fallback, attribution (mocked `fetch`) |
 | Smoke (Cypress, 1) | `npm.cmd run e2e` (with `npm.cmd run dev` running) | Start → Online → switch to entitlement → `ENTITLEMENT` → stop → Stale |
 
 `npm.cmd test` runs the first three in order. `npm.cmd run lint`, `npm.cmd run typecheck` and `npm.cmd run build` cover both workspaces. CI (GitHub Actions, `postgres:17` service) runs install, lint, typecheck, all Jest and Vitest tests, and build. Cypress runs locally only.
@@ -116,13 +126,15 @@ I built this with **Claude Code** as a pair. It scaffolded the workspaces and dr
 **Other things the process caught:**
 - A test that forced the `P2002` race branch, because the plain concurrency test passed whichever way the race went.
 - A legend CSS bug found during the browser check.
+- A race in the weather cache: a second request arriving during the first fetch would have fallen back to the clear-sky curve. The "shares one fetch" test caught it.
 - A measurement showing that with these numbers the split modes only differ in short scarce windows. I kept the spec's numbers and timed the demo recording to the morning ([DECISIONS.md](DECISIONS.md)).
 
 ## What I'd do next
 
 - Device ingest over **MQTT / AWS IoT Core** instead of HTTP, keeping the same idempotent ingest service
+- **Real metered demand** from apartment meters instead of the simulated profile, and measured PV output instead of the weather estimate
 - **Time-series storage** (Timestream or TimescaleDB) for readings, with Postgres keeping buildings, apartments and allocations
-- Batteries, tariffs and dollar savings; per-building time zones instead of "UTC as local"
+- Batteries, tariffs and dollar savings; panel tilt and orientation in the solar estimate
 - Auth and more than one building in the UI
 - Deploy with infrastructure as code; run Cypress in CI
 - Generate the web app's types from an OpenAPI document instead of duplicating them (ADR-005)
@@ -131,11 +143,13 @@ I built this with **Claude Code** as a pair. It scaffolded the workspaces and dr
 
 ## Recording the demo segment
 
-The modes only differ while solar is scarce. In the morning, Unit 6 (entitlement 30) gets about twice its Equal share. To show it:
-1. Run the simulator at **1 s** until "This interval" shows about **06:15**, then **Stop**.
+The modes only differ while solar is scarce. In the evening window, Unit 6 (entitlement 30) gets about three times Unit 1's share (entitlement 10) instead of the same. To show it:
+1. Run the simulator at **1 s** until "This interval" shows about **17:00 AEDT**, then **Stop**.
 2. Start recording. **Start**: the pill turns Online and the bars start filling.
-3. At about **06:30**, switch to **By lot entitlement**.
-4. At about **07:00**, **Stop**. The pill shows **Stale** 3–4 s later (three missed 1 s intervals).
+3. At about **17:10**, switch to **By lot entitlement**.
+4. At about **17:40**, **Stop**. The pill shows **Stale** 3–4 s later (three missed 1 s intervals).
+
+The morning (about 07:30–09:00) also works on a clear day. The window moves with the day's cloud, so check "Sunshine X h of Y h" on the weather card first.
 
 ## Repository layout
 

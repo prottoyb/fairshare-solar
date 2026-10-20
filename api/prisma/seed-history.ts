@@ -1,29 +1,39 @@
 import { ConflictException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { INTERVAL_MINUTES } from '../src/common/limits';
-import { addMinutes, startOfUtcDay } from '../src/common/time';
+import {
+  addDaysToDateString,
+  localDateString,
+  localDayRange,
+} from '../src/common/local-time';
+import { SITE } from '../src/common/site';
+import { addMinutes } from '../src/common/time';
 import { ReadingsService } from '../src/readings/readings.service';
 import { ReadingGenerator } from '../src/simulator/reading-generator';
 import { SIM_DEVICE_ID } from '../src/simulator/simulator.constants';
+import { WeatherService } from '../src/weather/weather.service';
 
 export type HistoryResult = {
   date: string;
   created: number;
   replayed: number;
   conflicts: number;
+  /** Intervals that used the clear-sky curve because weather was unavailable. */
+  fallbackIntervals: number;
 };
 
-const INTERVALS_PER_DAY = (24 * 60) / INTERVAL_MINUTES; // 288
-
 /**
- * F12: yesterday's (UTC) 288 intervals through ReadingsService.ingest(), the same
- * validated path as HTTP (ADR-004). Deterministic for a given seed, so re-running
- * gives replays, not duplicates. A 409 (that interval already holds different
- * simulator data) is counted and skipped rather than failing the seed.
+ * F12: yesterday (Melbourne local day: 288 intervals, or 276 / 300 on daylight-
+ * saving days) through ReadingsService.ingest(), the same validated path as HTTP
+ * (ADR-004). Solar comes from WeatherService for each interval (ADR-008).
+ * Deterministic for a given seed and weather, so re-running gives replays, not
+ * duplicates. A 409 (that interval already holds different data) is counted and
+ * skipped rather than failing the seed.
  */
 export async function seedHistory(
   prisma: PrismaClient,
   readings: ReadingsService,
+  weather: WeatherService,
   buildingId: string,
   seed: number,
   now = new Date(),
@@ -40,17 +50,25 @@ export async function seedHistory(
     building.apartments.map((a) => a.id),
     building.capacityW,
     SIM_DEVICE_ID,
+    SITE.timeZone,
   );
 
-  const start = addMinutes(startOfUtcDay(now), -24 * 60);
+  const date = addDaysToDateString(localDateString(now, SITE.timeZone), -1);
+  const { start, end } = localDayRange(date, SITE.timeZone);
   const result: HistoryResult = {
-    date: start.toISOString().slice(0, 10),
+    date,
     created: 0,
     replayed: 0,
     conflicts: 0,
+    fallbackIntervals: 0,
   };
-  for (let i = 0; i < INTERVALS_PER_DAY; i++) {
-    const dto = generator.next(addMinutes(start, i * INTERVAL_MINUTES));
+  for (let at = start; at < end; at = addMinutes(at, INTERVAL_MINUTES)) {
+    const irradiance = await weather.irradianceForInterval(
+      at,
+      INTERVAL_MINUTES,
+    );
+    if (irradiance === null) result.fallbackIntervals++;
+    const dto = generator.next(at, irradiance);
     try {
       const stored = await readings.ingest(buildingId, dto);
       if (stored.replayed) result.replayed++;

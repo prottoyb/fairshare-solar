@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { BuildingsService } from '../buildings/buildings.service';
-import { utcDayRange } from '../common/time';
+import { localDayRange } from '../common/local-time';
+import { SITE } from '../common/site';
 import { PrismaService } from '../prisma/prisma.service';
 
 export type DailySummary = {
@@ -36,11 +37,14 @@ export class SummaryService {
     private readonly buildings: BuildingsService,
   ) {}
 
-  /** Totals for one UTC day, summed in Postgres rather than in memory (§6.5). */
+  /**
+   * Totals for one Melbourne local day (ADR-008), summed in Postgres rather than
+   * in memory (§6.5).
+   */
   async daily(buildingId: string, date: string): Promise<DailySummary> {
     let range: { start: Date; end: Date };
     try {
-      range = utcDayRange(date);
+      range = localDayRange(date, SITE.timeZone);
     } catch {
       throw new BadRequestException('date must be a real YYYY-MM-DD date');
     }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { formatLocalTime } from '@/format'
+import { formatSiteTime } from '@/format'
+import { SITE_PLACE } from '@/site'
 import type { DeviceStatus } from '@/types'
 
 const props = defineProps<{
@@ -21,7 +22,7 @@ const capacityKw = computed(() => (props.capacityW / 1000).toLocaleString('en-AU
 
 const statusTitle = computed(() =>
   props.lastReadingAt
-    ? `Last reading received at ${formatLocalTime(props.lastReadingAt)}`
+    ? `Last reading received at ${formatSiteTime(props.lastReadingAt, true)}`
     : 'No reading since the server started',
 )
 </script>
@@ -31,7 +32,9 @@ const statusTitle = computed(() =>
     <div class="title">
       <p class="eyebrow">FairShare Solar</p>
       <h1>{{ name }}</h1>
-      <p class="meta">Shared rooftop solar · {{ capacityKw }} kW system</p>
+      <p class="meta">
+        Shared rooftop solar · {{ capacityKw }} kW system · {{ SITE_PLACE }}, Melbourne time
+      </p>
     </div>
     <div class="status-area">
       <span v-if="!connected" class="reconnecting" role="status">Reconnecting…</span>

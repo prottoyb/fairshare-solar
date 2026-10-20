@@ -7,6 +7,7 @@ import { LiveModule } from './live/live.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ReadingsModule } from './readings/readings.module';
 import { SimulatorModule } from './simulator/simulator.module';
+import { WeatherModule } from './weather/weather.module';
 
 // Fail fast at startup rather than on the first query.
 function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
@@ -25,6 +26,7 @@ function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
     LiveEventsModule,
     BuildingsModule,
     ReadingsModule,
+    WeatherModule,
     SimulatorModule,
     LiveModule,
   ],

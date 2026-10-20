@@ -9,6 +9,13 @@ import {
 } from '../src/live/live-events.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { ReadingsService } from '../src/readings/readings.service';
+import {
+  intervalIrradiance,
+  solarWhFromIrradiance,
+} from '../src/simulator/profiles';
+import { loadOpenMeteoFixture } from '../src/weather/__fixtures__/load-fixture';
+import { parseOpenMeteo } from '../src/weather/open-meteo';
+import { WeatherService } from '../src/weather/weather.service';
 import { createTestApp } from './utils/create-app';
 import { Apt, apartmentsOf, readingBody, rowCounts } from './utils/readings';
 import { resetDb } from './utils/reset-db';
@@ -114,14 +121,36 @@ describe('Live events, simulator API and seed history (e2e)', () => {
       "stores yesterday's 288 intervals through ingest, and replays on re-run",
       async () => {
         const readings = app.get(ReadingsService);
+        const weather = app.get(WeatherService);
 
-        const first = await seedHistory(prisma, readings, buildingId, 42, now);
+        // 09:00 UTC on the 20th is 20:00 in Fawkner, so "yesterday" is the 19th.
+        const first = await seedHistory(
+          prisma,
+          readings,
+          weather,
+          buildingId,
+          42,
+          now,
+        );
         expect(first).toEqual({
           date: '2026-10-19',
           created: 288,
           replayed: 0,
           conflicts: 0,
+          fallbackIntervals: 0, // the fake provider's saved response covers the 19th
         });
+
+        // Solar follows the real weather: 12:00–12:05 local on the 19th.
+        const noon = await prisma.reading.findFirstOrThrow({
+          where: { intervalStart: new Date('2026-10-19T01:00:00.000Z') },
+        });
+        const series = parseOpenMeteo(
+          loadOpenMeteoFixture(),
+          'Australia/Melbourne',
+        ).hourly.map((h) => ({ endsAt: h.endsAt, wm2: h.irradianceWm2 }));
+        const wm2 = intervalIrradiance(series, noon.intervalStart, 5)!;
+        expect(noon.solarWh).toBe(solarWhFromIrradiance(10_000, wm2, 5));
+        expect(noon.solarWh).toBeGreaterThan(0);
         const counts = await rowCounts(prisma);
         expect(counts).toEqual({
           readings: 288,
@@ -129,7 +158,14 @@ describe('Live events, simulator API and seed history (e2e)', () => {
           allocations: 288 * 6,
         });
 
-        const again = await seedHistory(prisma, readings, buildingId, 42, now);
+        const again = await seedHistory(
+          prisma,
+          readings,
+          weather,
+          buildingId,
+          42,
+          now,
+        );
         expect(again).toMatchObject({
           created: 0,
           replayed: 288,
@@ -162,7 +198,7 @@ describe('Live events, simulator API and seed history (e2e)', () => {
     it(
       'counts a conflicting interval instead of failing',
       async () => {
-        // Different simulator data already stored for yesterday 00:00.
+        // Different data already stored for 11:00 local yesterday (00:00 UTC).
         await http()
           .post(`/api/buildings/${buildingId}/readings`)
           .send(
@@ -175,6 +211,7 @@ describe('Live events, simulator API and seed history (e2e)', () => {
         const result = await seedHistory(
           prisma,
           app.get(ReadingsService),
+          app.get(WeatherService),
           buildingId,
           42,
           now,

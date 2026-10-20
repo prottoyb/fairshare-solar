@@ -35,6 +35,19 @@ The dashboard's status pill shows **Stale** (amber) and the API emits `device-st
 - **API down or hung:** stop and restart `npm.cmd run dev`, then press Start. Status shows OFFLINE until the first new reading.
 - **Every tick fails with 409:** the stored data for upcoming intervals came from a different source. Check the warnings for the interval time. This is safe to leave; each failed interval is skipped.
 
+## Related: weather source shows "fallback"
+
+The weather card says "No weather data … clear-sky estimate", or `GET /api/weather?date=<simulated date>` returns `"source": "fallback"`. The simulator keeps running; only the solar estimate is less realistic. It is not a Stale alert.
+
+1. **Is the simulated date within the forecast?** Open-Meteo covers 2 days back to 7 days ahead of *real* today. The simulated clock runs ahead, so after about a week of simulated days fallback is expected. This is normal for a long demo run.
+2. **Check the API log** for `WeatherService` warnings: `Weather fetch failed (…)` (network, HTTP error or bad response) or `No weather data for <date>` (out of range). After a failure it retries every 60 s by itself.
+3. **Can this machine reach Open-Meteo?**
+   ```powershell
+   Invoke-RestMethod "https://api.open-meteo.com/v1/forecast?latitude=-37.707&longitude=144.968&hourly=shortwave_radiation&timezone=Australia%2FMelbourne&forecast_days=1"
+   ```
+   If this fails, the cause is the network or a proxy, or Open-Meteo is down (check https://open-meteo.com/). No API key is involved.
+4. **Recover:** once Open-Meteo is reachable, new intervals use real weather again within a minute. Intervals already stored on the fallback stay as they are (ADR-003: history isn't rewritten). If the simulated date is simply too far ahead, a database reset and re-seed brings the clock back to today (the user does this; see README).
+
 ## Escalate when
 
 - `/api/health` keeps reporting `db: "down"` after Postgres has been restarted;
