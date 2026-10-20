@@ -61,7 +61,11 @@ const summaryDate = computed(() => {
       <main class="layout">
         <div class="column area-controls">
           <div class="panel">
-            <SimulatorControls @status="simulator = $event" />
+            <SimulatorControls
+              :device-status="deviceStatus?.status ?? null"
+              :connected="connected"
+              @status="simulator = $event"
+            />
           </div>
           <div class="panel">
             <SplitModeToggle :model-value="building.splitMode" :save="setSplitMode" />

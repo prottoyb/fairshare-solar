@@ -1,7 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api, errorMessage } from '@/api/client'
-import type { SimulatorStatus } from '@/types'
+import type { DeviceStatus, SimulatorStatus } from '@/types'
+
+const props = defineProps<{
+  /** Live device status from the socket; a change means the simulator may have been started or stopped elsewhere. */
+  deviceStatus: DeviceStatus | null
+  /** Socket connection state; a reconnect may have missed status changes. */
+  connected: boolean
+}>()
 
 const emit = defineEmits<{ status: [status: SimulatorStatus] }>()
 
@@ -37,6 +44,34 @@ onMounted(() =>
     speedMs.value = current.speedMs
     return current
   }),
+)
+
+/**
+ * Re-reads the status after a start/stop that happened elsewhere (another tab or
+ * the API). Driven by live events, not polling; skipped while our own request is
+ * in flight, and quiet on failure (the next event tries again).
+ */
+async function sync(): Promise<void> {
+  if (busy.value) return
+  try {
+    const current = await api.simulatorStatus()
+    status.value = current
+    speedMs.value = current.speedMs
+    emit('status', current)
+  } catch {
+    // Keep showing the last known status.
+  }
+}
+
+watch(
+  () => props.deviceStatus,
+  () => void sync(),
+)
+watch(
+  () => props.connected,
+  (isConnected, wasConnected) => {
+    if (isConnected && !wasConnected) void sync()
+  },
 )
 
 const start = () => run(() => api.startSimulator(speedMs.value))
