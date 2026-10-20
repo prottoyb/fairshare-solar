@@ -32,8 +32,27 @@ describe('SplitModeToggle', () => {
   it('uses real radios in a fieldset with a legend', () => {
     const wrapper = mountToggle()
     expect(wrapper.find('fieldset legend').text()).toBe('Split mode')
-    expect(wrapper.findAll('input[type="radio"]')).toHaveLength(2)
+    expect(wrapper.findAll('input[type="radio"]')).toHaveLength(3)
     expect(radio(wrapper, 'split-equal').element.checked).toBe(true)
+    // The third mode (ADR-010), labelled for people, CUSTOM for the API.
+    const custom = radio(wrapper, 'split-custom')
+    expect(custom.element.value).toBe('CUSTOM')
+    expect(custom.element.closest('label')?.textContent).toContain('Owner-set shares')
+  })
+
+  it('PATCHes CUSTOM when Owner-set shares is chosen', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(200, { splitMode: 'CUSTOM' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountToggle()
+
+    await radio(wrapper, 'split-custom').setValue(true)
+    await flushPromises()
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ splitMode: 'CUSTOM' })
+    expect(wrapper.text()).toContain('Applies from the next interval')
   })
 
   it('PATCHes the new mode and says when it applies', async () => {

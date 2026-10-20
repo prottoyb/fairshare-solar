@@ -72,18 +72,24 @@ flowchart LR
 - **Live**: the `reading` event is emitted only after commit and never for replays. `device-status` is emitted only when the status changes, and sent to each client as it connects.
 - **Daily summary**: totals come from Postgres `aggregate` / `groupBy` over the Melbourne local day (288 intervals, or 276 / 300 on daylight-saving days); percentages are rounded to 1 decimal only in the response.
 
-Specification: [SPEC.md](SPEC.md). Decisions and trade-offs: [DECISIONS.md](DECISIONS.md) (8 ADRs plus a build log). On-call: [RUNBOOK.md](RUNBOOK.md).
+Specification: [SPEC.md](SPEC.md). Decisions and trade-offs: [DECISIONS.md](DECISIONS.md) (10 ADRs plus a build log). On-call: [RUNBOOK.md](RUNBOOK.md).
 
 ## Data
 
 - **Location:** Fawkner VIC 3060, at the suburb centre (−37.707, 144.968), never a street address. Time zone Australia/Melbourne.
 - **Solar is estimated from real weather.** The API asks the free [Open-Meteo](https://open-meteo.com/) forecast API (no key) for hourly shortwave radiation (W/m², the mean of the *preceding* hour) and cloud cover, plus sunrise, sunset, sunshine and daylight. Each hour mean sits at the middle of its hour and is interpolated to the middle of every 5-minute interval. Then `solar Wh = 10 kW × irradiance / 1000 × 0.8 × 5/60`, where 0.8 is a typical performance ratio for inverter, wiring, heat and dirt losses. Responses are cached in memory per local date. If Open-Meteo is unreachable or a date is outside the forecast, solar falls back to a clear-sky curve, and `GET /api/weather` and the dashboard say so ([ADR-008](DECISIONS.md)).
-- **Apartment demand is simulated**: a seeded base load plus morning and evening bumps on the Melbourne local hour.
+- **Apartment demand is simulated, and benchmarked** ([ADR-009](DECISIONS.md)):
+  - Household size follows lot size (entitlement 10 → 1 person, 15 or 20 → 2, 30 → 3), with daily targets of 7 / 10 / 13 kWh. The building averages about **9.5 kWh per flat per day**, against a CitiPower benchmark of 9.9 kWh/day for Melbourne units in 2025.
+  - The shape is an **illustrative typical residential load shape, not measured data**: low overnight, a morning peak, quiet weekday daytime and an evening peak. The weekend version has a later morning and more daytime use.
+  - Each flat's routine is shifted by up to ±45 minutes, each day gets its own 0.85–1.15 multiplier, and smooth mean-reverting noise plus the odd kettle/oven/washing-machine burst keep it lifelike. The median change from one 5-minute interval to the next is about 3 %, down from 14 %.
+  - Heating below 16 °C and cooling above 26 °C come from the real Open-Meteo temperature.
+  - Every value is a pure function of seed, flat, local date and interval, so restarts and re-seeds replay instead of conflicting.
+- **Owner-set shares** ([ADR-010](DECISIONS.md)): besides *Equal* and *By lot entitlement*, the building owner can set each flat's percentage (whole numbers, exactly 100 % in total) in **Building owner settings** and choose *Owner-set shares*. The seed starts them at 15/15/15/15/20/20. Like the other modes, a change applies from the next interval, and past readings never change.
 - **Attribution:** Weather data: [Open-Meteo.com](https://open-meteo.com/) ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). The dashboard shows the same attribution next to the weather.
 
 ## Allocation model
 
-Each interval's solar is shared **in proportion to weight**: 1 each in *Equal* mode, the lot entitlement in *By lot entitlement* mode. **Nobody gets more than they're using right now.** Energy one apartment can't use is shared again among those still wanting more ("water-filling"). Only energy that nobody can use is exported to the grid. Rounding is done in whole Wh: each apartment gets the floor of its exact share, and any leftover Wh go one at a time by largest fractional remainder.
+Each interval's solar is shared **in proportion to weight**: 1 each in *Equal* mode, the lot entitlement in *By lot entitlement* mode, and the owner's percentage in *Owner-set shares* mode. **Nobody gets more than they're using right now.** Energy one apartment can't use is shared again among those still wanting more ("water-filling"). Only energy that nobody can use is exported to the grid. Rounding is done in whole Wh: each apartment gets the floor of its exact share, and any leftover Wh go one at a time by largest fractional remainder.
 
 Invariants, each with a test:
 
@@ -96,15 +102,15 @@ Invariants, each with a test:
 | I5 | Deterministic, and independent of input order |
 | I6 | Every output is a whole number ≥ 0 |
 
-When solar exceeds demand, both modes give the same result, because everyone is fully supplied. The modes only differ while solar is scarce. With 10 kW and recent Fawkner weather, that's roughly 07:30–09:00 and 17:05–18:30 local time, and it depends on the day's cloud.
+When solar exceeds demand, every mode gives the same result, because everyone is fully supplied. The modes only differ while solar is scarce. With 10 kW, the realistic demand and recent Fawkner weather, that's roughly 07:30–08:25 and 17:25–18:35 local time, and it depends on the day's cloud.
 
 ## Testing
 
 | Layer | Command | Covers |
 |---|---|---|
-| API unit (Jest, 148) | `npm.cmd run test -w api` | Allocation engine: 7 worked examples, I1–I6, 2 × 1,000 seeded property cases, every `RangeError`. Time helpers including Melbourne local days and the daylight-saving days (276 and 300 intervals). Irradiance → Wh model and interpolation. Open-Meteo parser on a saved real response. Weather cache, fallback and retry (fake provider and clock). Payload hash, profiles, reading generator, stale logic and simulator (fake timers) |
-| API e2e (Jest + Supertest, 83) | `npm.cmd run test:e2e -w api` | Against `fairshare_test`, with a **fake weather provider** (never the network): 201 / 200 replay / 409 / concurrent races / forced `P2002`, every 400 case, 404s, capacity from the building, split-mode snapshot, hand-calculated Melbourne-day summary, DB `CHECK`s, live event bus, simulator validation, seed history on real (saved) weather, `GET /api/weather` incl. fallback |
-| Web unit (Vitest, 13) | `npm.cmd run test:unit -w web -- --run` | `ApartmentBars` meters and aria values; `SplitModeToggle` PATCH, revert on error; `WeatherCard` Melbourne times, this hour, fallback, attribution (mocked `fetch`) |
+| API unit (Jest, 168) | `npm.cmd run test -w api` | Allocation engine: 7 worked examples, I1–I6, 2 × 1,000 seeded property cases, every `RangeError`. Time helpers including Melbourne local days and the daylight-saving days (276 and 300 intervals). Irradiance → Wh model and interpolation. Open-Meteo parser on a saved real response. Weather cache, fallback and retry (fake provider and clock). **Demand model**: per-flat daily targets ±20 %, building average 8–12 kWh, median interval change under 6 %, day-to-day variation, weekend vs weekday, determinism, staggered peaks, bounds, heating/cooling. Payload hash, reading generator, stale logic and simulator (fake timers) |
+| API e2e (Jest + Supertest, 104) | `npm.cmd run test:e2e -w api` | Against `fairshare_test`, with a **fake weather provider** (never the network): 201 / 200 replay / 409 / concurrent races / forced `P2002`, every 400 case, 404s, capacity from the building, split-mode snapshot, hand-calculated Melbourne-day summary, DB `CHECK`s, live event bus, simulator validation, seed history on real (saved) weather, `GET /api/weather` incl. fallback, **owner shares**: `PUT /shares` validation, PATCH to `CUSTOM`, a scarce interval split exactly by the shares, history kept |
+| Web unit (Vitest, 19) | `npm.cmd run test:unit -w web -- --run` | `ApartmentBars` meters and aria values; `SplitModeToggle` PATCH (all three modes), revert on error; `WeatherCard` Melbourne times, this hour, fallback, attribution; `OwnerSettings` labelled inputs, live total, Save only at 100 %, PUT and revert on error (mocked `fetch`) |
 | Smoke (Cypress, 1) | `npm.cmd run e2e` (with `npm.cmd run dev` running) | Start → Online → switch to entitlement → `ENTITLEMENT` → stop → Stale |
 
 `npm.cmd test` runs the first three in order. `npm.cmd run lint`, `npm.cmd run typecheck` and `npm.cmd run build` cover both workspaces. CI (GitHub Actions, `postgres:17` service) runs install, lint, typecheck, all Jest and Vitest tests, and build. Cypress runs locally only.
@@ -135,7 +141,7 @@ I built this with **Claude Code** as a pair. It scaffolded the workspaces and dr
 - **Real metered demand** from apartment meters instead of the simulated profile, and measured PV output instead of the weather estimate
 - **Time-series storage** (Timestream or TimescaleDB) for readings, with Postgres keeping buildings, apartments and allocations
 - Batteries, tariffs and dollar savings; panel tilt and orientation in the solar estimate
-- Auth and more than one building in the UI
+- Auth, with **Building owner settings behind owner authentication** (in this demo anyone with the page can change the shares), and more than one building in the UI
 - Deploy with infrastructure as code; run Cypress in CI
 - Generate the web app's types from an OpenAPI document instead of duplicating them (ADR-005)
 - Upgrade to NestJS 12 (ESM) and Prisma 7 (driver adapters), then TypeScript 7 once ts-jest supports it (ADR-002)
@@ -143,13 +149,13 @@ I built this with **Claude Code** as a pair. It scaffolded the workspaces and dr
 
 ## Recording the demo segment
 
-The modes only differ while solar is scarce. In the evening window, Unit 6 (entitlement 30) gets about three times Unit 1's share (entitlement 10) instead of the same. To show it:
-1. Run the simulator at **1 s** until "This interval" shows about **17:00 AEDT**, then **Stop**.
+The modes only differ while solar is scarce. In the evening window, Unit 6 (entitlement 30) gets about three times Unit 1's share (entitlement 10) in *By lot entitlement*, instead of the same in *Equal*. To show it:
+1. Run the simulator at **1 s** until "This interval" shows about **17:20 AEDT**, then **Stop**.
 2. Start recording. **Start**: the pill turns Online and the bars start filling.
-3. At about **17:10**, switch to **By lot entitlement**.
-4. At about **17:40**, **Stop**. The pill shows **Stale** 3–4 s later (three missed 1 s intervals).
+3. At about **17:30**, switch to **By lot entitlement**. Optionally, at about **17:50**, switch to **Owner-set shares**.
+4. At about **18:15**, **Stop**. The pill shows **Stale** 3–4 s later (three missed 1 s intervals).
 
-The morning (about 07:30–09:00) also works on a clear day. The window moves with the day's cloud, so check "Sunshine X h of Y h" on the weather card first.
+The morning (about 07:35–08:25) also works on a clear day. The window moves with the day's cloud, so check "Sunshine X h of Y h" on the weather card first.
 
 ## Repository layout
 

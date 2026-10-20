@@ -63,7 +63,9 @@ There's one user: a viewer of the dashboard (such as a building manager). **No a
 |---|---|---|---|
 | F1 | Allocation engine | MUST | A pure function in `api/src/allocation/allocate.ts` as specified in §6.1. Invariants unit-tested (§7). No I/O, no Nest imports. |
 | F2 | Reading ingest | MUST | `POST /api/buildings/:id/readings` with validation (§5.7), allocation, and storing the reading, demands and allocations in **one Prisma transaction**. Idempotent by `(deviceId, intervalStart)`. |
-| F3 | Building API | MUST | `GET /api/buildings`, `GET /api/buildings/:id` (with apartments), `PATCH /api/buildings/:id` (splitMode only). Unknown id returns 404. |
+| F3 | Building API | MUST | `GET /api/buildings`, `GET /api/buildings/:id` (with apartments and their `customSharePct`), `PATCH /api/buildings/:id` (splitMode only). Unknown id returns 404. |
+| F14 | Owner-set shares | MUST | Split mode `CUSTOM` ("Owner-set shares"): `PUT /api/buildings/:id/shares` sets each apartment's whole-number share (1–100, exactly one per apartment, total exactly 100); weight = share; applies from the next interval (ADR-010). UI: third radio plus a "Building owner settings" panel. No auth in this demo. |
+| F15 | Realistic demand | MUST | Simulated demand benchmarked to about 10 kWh per flat per day, smooth, different per flat and per day, and deterministic per interval (§6.2, ADR-009). |
 | F4 | Daily summary | MUST | `GET /api/buildings/:id/summary?date=YYYY-MM-DD` returns the totals in §5.7, using **database aggregation** (§6.5), not by loading every row into memory. |
 | F5 | Simulator | MUST | Seeded and deterministic; one 5-minute interval every 2 s (configurable); calls the **same `ReadingsService.ingest()`** as HTTP; start, stop and status endpoints. |
 | F6 | Live stream | MUST | A Socket.IO gateway emits `reading` after each committed interval and `device-status` on change. |
@@ -188,6 +190,7 @@ datasource db {
 enum SplitMode {
   EQUAL
   ENTITLEMENT
+  CUSTOM // owner-set shares (ADR-010)
 }
 
 model Building {
@@ -207,6 +210,7 @@ model Apartment {
   building       Building     @relation(fields: [buildingId], references: [id])
   label          String                        // "Unit 1"
   lotEntitlement Int                           // > 0
+  customSharePct Int?                          // owner-set share in %, 1–100 when set
   demands        Demand[]
   allocations    Allocation[]
   @@unique([buildingId, label])
@@ -250,6 +254,7 @@ model Allocation {
 - **Database-level guarantees:** after the first migration, add a second migration (`npx prisma migrate dev --create-only --name checks`, then edit the SQL) containing `CHECK` constraints:
   - `solarWh >= 0`, `exportedWh >= 0`, `demandWh >= 0`, `allocatedWh >= 0`
   - `lotEntitlement > 0`, `capacityW > 0`
+  - `customSharePct` is NULL or between 1 and 100 (migration `owner_shares`)
 
   The database refuses bad data even if application validation is bypassed. Remember that Prisma quotes camelCase column names: `"solarWh"`.
 - **All energy is stored as integer watt-hours. No floats in stored energy** (ADR-001). Percentages are only calculated when a response is sent.
@@ -275,8 +280,9 @@ Errors use Nest's default `{ statusCode, message, error }` shape.
 |---|---|---|---|
 | GET | `/api/health` | – | 200 `{status:"ok", db:"up"}` (runs `SELECT 1`) |
 | GET | `/api/buildings` | – | 200 list (id, name, splitMode, capacityW) |
-| GET | `/api/buildings/:id` | – | 200 with apartments ordered by label; 404 |
-| PATCH | `/api/buildings/:id` | `{ splitMode: "EQUAL" \| "ENTITLEMENT" }` | 200; 400; 404 |
+| GET | `/api/buildings/:id` | – | 200 with apartments ordered by label, each with `customSharePct`; 404 |
+| PATCH | `/api/buildings/:id` | `{ splitMode: "EQUAL" \| "ENTITLEMENT" \| "CUSTOM" }` | 200; 400 (incl. CUSTOM while any apartment has no share); 404 |
+| PUT | `/api/buildings/:id/shares` | `{ shares: [{ apartmentId, sharePct }] }`: integers 1–100, exactly one per apartment, total exactly 100 | 200 building with apartments; 400 naming the problem (missing / unknown / duplicate id, total, range); 404 |
 | POST | `/api/buildings/:id/readings` | below | 201 new; 200 replay; 400; 404; 409 |
 | GET | `/api/buildings/:id/readings?limit=50` | int 1–288, default 50 | 200, newest first, with allocations; 404 |
 | GET | `/api/buildings/:id/summary?date=YYYY-MM-DD` | required Melbourne local date | 200; 400; 404 |
@@ -405,7 +411,16 @@ Plus a **seeded property test**: 1,000 random cases from `mulberry32` (no extra 
   - `WeatherService` caches one response per local date in memory: past dates forever, today and future dates for 1 hour. After a failed fetch it waits 60 s before retrying, and concurrent callers share one fetch.
   - **Fallback:** if the API fails or the date is outside the response, `WeatherService` logs one warning (Nest `Logger`) and the generator uses the previous clear-sky curve, so the simulator never stops. In that curve `h` is the local fractional hour, `clearSky = (6 ≤ h ≤ 18) ? sin(π (h − 6) / 12) : 0`, and `cloud = 0.7 × prevCloud + 0.3 × (0.6 + 0.4 × prng())`, starting from 1.
   - **Tests never call the network.** Unit tests parse one saved real response (`api/src/weather/__fixtures__/`); e2e tests replace the weather provider with a fake through Nest's testing module.
-- **Demand** per apartment (still simulated): a fixed base of 40–80 Wh (drawn once per apartment from the PRNG), plus a morning bump (6–9h local, +150 Wh peak) and an evening bump (17–22h local, +300 Wh peak), with ±20 % noise. Clamp to `[0, 10000]` and round. The PRNG advances the same way with or without weather, so demand doesn't depend on the weather source.
+- **Demand** per apartment (simulated; ADR-009). It is a pure function `intervalDemandWh` of (`SIM_SEED`, flat index, Melbourne local date, interval of the day) plus the temperature, using `mulberry32` streams seeded from those parts. It never depends on earlier readings, so restarts and re-seeds replay.
+  - **Household size from lot size** (one constant): entitlement 10 → 1 person, 15 → 2, 20 → 2, 30 → 3. Daily targets are 1 ≈ 7 kWh, 2 ≈ 10 kWh and 3 ≈ 13 kWh, a building average of about 10 kWh/day per flat, in line with CitiPower's 9.9 kWh/day for units in 2025 (a benchmark, not the source of the shape).
+  - **Shape:** one normalised 24-hour **illustrative typical residential load shape (not measured)**, as hourly fractions summing to 1. It has a low overnight base, a morning peak around 06:30–08:30, low weekday daytime use and an evening peak around 17:30–21:30. A **weekend** variant has a later, smaller morning peak and more daytime use. It is interpolated linearly between hour centres, with no step at the hour.
+  - **Variation:**
+    - each flat's routine is shifted by a seeded −45…+45 minutes;
+    - a daily multiplier of 0.85–1.15 per (flat, date);
+    - smooth mean-reverting (AR(1)) noise per flat, mean-zero over the day, for a median interval-to-interval change under 6 %;
+    - appliance events in waking hours: +40–150 Wh for 1–4 intervals at a low seeded probability, taken out of the day's budget.
+  - **Heating and cooling:** `temperature_2m` from the same Open-Meteo request (instantaneous at its timestamp, so interpolated without the half-hour offset). In waking hours, 40 W per °C below 16 °C and 60 W per °C above 26 °C are added, capped at 600 W. Nothing is added when the temperature is missing (fallback).
+  - Clamp to `[0, 10000]` and round.
 - Each tick asks `WeatherService` for the interval's irradiance, builds the **same `CreateReadingDto`**, and calls `ReadingsService.ingest(buildingId, dto)`. Log and continue on errors; never crash the timer.
 
 ### 6.3 Device status / stale detection
@@ -431,7 +446,8 @@ The web app calls relative URLs (`/api/...`) and `io()` with no URL.
 | Component | Shows | Notes |
 |---|---|---|
 | `BuildingHeader` | Building name, capacity (kW), device status pill | Status as **text plus colour** (Online green / Stale amber / Offline grey). `title` shows the last reading time. `data-testid="device-status"` |
-| `SplitModeToggle` | Radio group *Equal* / *By lot entitlement* | Real radios in `<fieldset><legend>`. PATCHes on change and shows "Applies from the next interval". Reverts and shows an error if the PATCH fails. `data-testid="split-entitlement"` on that radio |
+| `SplitModeToggle` | Radio group *Equal* / *By lot entitlement* / *Owner-set shares* | Real radios in `<fieldset><legend>`. PATCHes on change and shows "Applies from the next interval". Reverts and shows an error if the PATCH fails. `data-testid="split-entitlement"` / `"split-custom"` on those radios |
+| `OwnerSettings` | "Building owner settings" disclosure (`<details>`) under Split mode: one labelled number input (%) per unit, a live total in an `aria-live` region | Real labels in a `<fieldset><legend>`. Save is disabled unless every share is a whole number from 1 to 100 and the total is exactly 100. PUTs `/shares` and shows "Applies from the next interval", or reverts with an error. Works at 375 px. No auth in this demo |
 | `LiveFlow` | Simulated time, solar Wh, allocated Wh, exported Wh, split mode used | `aria-live="polite"`. Shows "Waiting for first reading…" when empty. `data-testid="live-split-mode"` on the split mode value |
 | `ApartmentBars` | Per unit: label, entitlement, allocated vs demand bar, numbers in Wh | Bar is a styled `<div role="meter" aria-valuemin="0" :aria-valuemax="demandWh" :aria-valuenow="allocatedWh" :aria-label="…">` **plus** visible numbers. No chart library |
 | `DailySummary` | `/summary` table for the simulated date | Refetches every 10 readings and when the date changes, plus a manual refresh button. Real `<table>`, `<th scope>`, `<caption>` |
@@ -440,7 +456,7 @@ The web app calls relative URLs (`/api/...`) and `io()` with no URL.
 
 - **Composables:**
   - `useLive()`: one socket per app; reactive `connected`, `latestReading`, `deviceStatus`, `recentReadings` (ring buffer of 50). Shows "Reconnecting…" while disconnected. Disconnects in `onUnmounted`.
-  - `useBuilding()`: loads the first building, PATCHes split mode.
+  - `useBuilding()`: loads the first building, PATCHes split mode, PUTs owner shares.
   - No Pinia, no Router.
 - **Styling:** plain CSS with custom properties. Clean, light, generous spacing. Solar yellow `#F5B700` for allocated, slate `#475569` for demand, text contrast ≥ 4.5:1. Must look tidy at 1280×720 and 375 px wide.
 

@@ -1,6 +1,6 @@
 // API shapes, duplicated from the NestJS app on purpose (ADR-005).
 
-export type SplitMode = 'EQUAL' | 'ENTITLEMENT'
+export type SplitMode = 'EQUAL' | 'ENTITLEMENT' | 'CUSTOM'
 
 export type BuildingSummary = {
   id: string
@@ -13,7 +13,12 @@ export type Apartment = {
   id: string
   label: string
   lotEntitlement: number
+  /** Owner-set share in %, 1–100 (ADR-010); null if not set. */
+  customSharePct: number | null
 }
+
+/** Body item of `PUT /api/buildings/:id/shares`. */
+export type ShareInput = { apartmentId: string; sharePct: number }
 
 export type BuildingDetail = BuildingSummary & {
   intervalMinutes: number
