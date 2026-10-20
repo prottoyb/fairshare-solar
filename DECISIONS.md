@@ -113,6 +113,26 @@ If two inserts race, the loser's `P2002` unique-violation is caught, and the sam
 - The clear-sky solar fallback's cloud walk now has the generator's PRNG to itself, so its random sequence differs from before. Its formula is unchanged.
 - The fixture now combines two real Open-Meteo responses for 18–26 October 2026: the original forecast, plus `temperature_2m` requested later for the same dates with `start_date`/`end_date`. The merge checked that the hourly timestamps match exactly.
 
+## ADR-010 Owner-set shares (CUSTOM split mode)
+
+**Context.** The building owner had no way to set the split. The only write endpoint changed the mode between Equal and Entitlement, and lot entitlements are fixed by the seed (and by strata records in real life).
+
+**Decision.**
+- **Data.** A third split mode, `CUSTOM` ("Owner-set shares" in the UI), and `Apartment.customSharePct Int?`. A database CHECK keeps it between 1 and 100 when set. The seed's default is 15/15/15/15/20/20, visibly different from Equal (16.7 % each) and Entitlement (10/10/15/15/20/30). A re-seed fills only missing shares and keeps the owner's choice.
+- **API.** `PUT /api/buildings/:id/shares` with `{ shares: [{ apartmentId, sharePct }] }`. Checks run in order:
+  1. DTO: whole numbers 1–100, a non-empty list, no unknown fields;
+  2. the building exists (404);
+  3. exactly one entry per apartment, naming missing, unknown or duplicate ids;
+  4. the total is exactly 100 (400, giving the actual total).
+
+  All shares are written in one transaction, and the building is returned with its apartments. `GET /api/buildings/:id` includes `customSharePct`. `PATCH` accepts `CUSTOM`, with a 400 naming any unit without a share.
+- **Engine input only.** In `CUSTOM` mode the weight is `customSharePct`; the allocation algorithm is unchanged (ADR-007). The mode and shares are read inside the ingest transaction, the same snapshot rule as ADR-003. A change applies from the next interval, and past readings never change: `splitModeUsed` and the stored allocations keep history truthful. The shares themselves aren't copied onto each reading.
+- **No auth.** The UI panel is labelled "Building owner settings". In a real product it would sit behind owner authentication (README "What I'd do next"). This demo adds none.
+
+**Consequences.**
+- The owner can favour anyone, for example a flat that paid for more panels. Water-filling still caps everyone at their demand and shares the rest (I1–I3 still hold), so shares only matter while solar is scarce, as with the other modes.
+- Shares are whole percentages totalling 100 exactly, which keeps the input simple and auditable. Finer splits would need a different unit.
+
 ## Build-time decisions
 
 - **M1: web toolchain versions come from `create-vue@3.24.0` as generated.** It scaffolded Vue 3.5, Vite 8, **Vitest 4.1** (the spec expected 5) and **TypeScript 6.0** in `web`. The TypeScript-below-7 rule only matters for the API (ts-jest), and vue-tsc 3.3 supports TS 6, so the scaffold's versions are kept rather than hand-editing them. API stays on TypeScript 5.9.3.
@@ -180,3 +200,4 @@ If two inserts race, the loser's `P2002` unique-violation is caught, and the sam
 - **W3: the simulator's "Stopped." hint no longer says "Simulated data only"**, because solar is now an estimate from real weather.
 - **D1: realistic demand (ADR-009).** The old `baseDemandWh` / `demandWh` and their tests are replaced by `intervalDemandWh` and `demand.spec.ts` (18 tests covering every target in the requirements). `ReadingGenerator` now takes `{ id, lotEntitlement }` per flat and `{ irradianceWm2, temperatureC }` per interval. `WeatherService.intervalWeather()` returns both from the same cache entry (nulls in fallback). The simulator and the seed use it.
 - **D1: a first version failed the ±20 % test on one flat-day (79 % of target).** The noise could drift below zero over a whole day, and a day without appliance events fell under the shape budget reserved for them. Rather than loosen the test, the noise is now mean-zero per day, and the day's actual event energy comes out of the budget. The daily total then follows the multiplier, as designed.
+- **D2: owner-set shares backend (ADR-010).** The migration `owner_shares` was written by hand (adding the `CUSTOM` enum value, the `customSharePct` column and its CHECK), so `fairshare_dev` wasn't touched before the user's reset. It was applied to `fairshare_test` with `migrate deploy`, and `prisma migrate diff` against the schema shows no drift. The seed fills only missing shares and never overwrites one already set (tested). The `splitMode` validation message now lists `EQUAL, ENTITLEMENT, CUSTOM`; that e2e expectation was updated for the new enum value.

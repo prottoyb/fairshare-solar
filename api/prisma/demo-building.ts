@@ -13,15 +13,24 @@ export const DEMO_BUILDING = {
 
 export { SIM_DEVICE_ID as DEMO_DEVICE_ID } from '../src/simulator/simulator.constants';
 
-export const DEMO_APARTMENTS = [10, 10, 15, 15, 20, 30].map(
-  (lotEntitlement, i) => ({ label: `Unit ${i + 1}`, lotEntitlement }),
-);
+const ENTITLEMENTS = [10, 10, 15, 15, 20, 30];
+/**
+ * Default owner-set shares (ADR-010), totalling 100 %. Visibly different from
+ * Equal (16.7 % each) and from Entitlement (10/10/15/15/20/30).
+ */
+export const DEFAULT_SHARES_PCT = [15, 15, 15, 15, 20, 20];
+
+export const DEMO_APARTMENTS = ENTITLEMENTS.map((lotEntitlement, i) => ({
+  label: `Unit ${i + 1}`,
+  lotEntitlement,
+  customSharePct: DEFAULT_SHARES_PCT[i],
+}));
 
 /**
  * Idempotent: finds the building by name (names aren't unique in the schema, so this
  * can't be a Prisma upsert) and upserts apartments by (buildingId, label).
  * Re-running leaves one building with six apartments. An existing building keeps its
- * current split mode.
+ * current split mode, and apartments keep owner-set shares already chosen.
  */
 export async function upsertDemoBuilding(
   prisma: PrismaClient,
@@ -40,12 +49,23 @@ export async function upsertDemoBuilding(
       }));
 
     for (const apt of DEMO_APARTMENTS) {
+      const where = {
+        buildingId_label: { buildingId: building.id, label: apt.label },
+      };
+      const current = await tx.apartment.findUnique({
+        where,
+        select: { customSharePct: true },
+      });
       await tx.apartment.upsert({
-        where: {
-          buildingId_label: { buildingId: building.id, label: apt.label },
-        },
+        where,
         create: { buildingId: building.id, ...apt },
-        update: { lotEntitlement: apt.lotEntitlement },
+        update: {
+          lotEntitlement: apt.lotEntitlement,
+          // Only fill a missing share; never overwrite the owner's choice.
+          ...(current?.customSharePct == null
+            ? { customSharePct: apt.customSharePct }
+            : {}),
+        },
       });
     }
     return building;

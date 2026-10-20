@@ -1,7 +1,10 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { upsertDemoBuilding } from '../prisma/demo-building';
+import {
+  DEFAULT_SHARES_PCT,
+  upsertDemoBuilding,
+} from '../prisma/demo-building';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './utils/create-app';
 import { resetDb } from './utils/reset-db';
@@ -120,7 +123,7 @@ describe('Buildings (e2e)', () => {
         .send({ splitMode: 'BY_SIZE' })
         .expect(400);
       expect(res.body).toMatchObject({
-        message: ['splitMode must be one of: EQUAL, ENTITLEMENT'],
+        message: ['splitMode must be one of: EQUAL, ENTITLEMENT, CUSTOM'],
       });
     });
 
@@ -148,6 +151,30 @@ describe('Buildings (e2e)', () => {
         where: { id: buildingId },
       });
       expect(stored.splitMode).toBe('ENTITLEMENT');
+    });
+
+    it('keeps owner shares already set, and fills only missing ones', async () => {
+      const apts = await prisma.apartment.findMany({
+        where: { buildingId },
+        orderBy: { label: 'asc' },
+      });
+      await prisma.apartment.update({
+        where: { id: apts[0].id },
+        data: { customSharePct: 40 },
+      });
+      await prisma.apartment.update({
+        where: { id: apts[1].id },
+        data: { customSharePct: null },
+      });
+
+      await upsertDemoBuilding(prisma);
+
+      const after = await prisma.apartment.findMany({
+        where: { buildingId },
+        orderBy: { label: 'asc' },
+      });
+      expect(after[0].customSharePct).toBe(40); // owner's choice kept
+      expect(after[1].customSharePct).toBe(DEFAULT_SHARES_PCT[1]); // filled in
     });
   });
 });

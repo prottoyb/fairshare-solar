@@ -3,7 +3,7 @@ import {
   ConflictException,
   Injectable,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, SplitMode } from '@prisma/client';
 import { allocate } from '../allocation/allocate';
 import { buildingNotFound } from '../buildings/buildings.service';
 import { INTERVAL_MINUTES } from '../common/limits';
@@ -79,11 +79,17 @@ export class ReadingsService {
     let created: ReadingResult;
     try {
       created = await this.prisma.$transaction(async (tx) => {
-        // Read the mode inside the transaction and snapshot it (ADR-003).
-        const { splitMode } = await tx.building.findUniqueOrThrow({
-          where: { id: buildingId },
-          select: { splitMode: true },
-        });
+        // Read the mode (and owner shares) inside the transaction and snapshot
+        // them (ADR-003, ADR-010).
+        const { splitMode, apartments: shares } =
+          await tx.building.findUniqueOrThrow({
+            where: { id: buildingId },
+            select: {
+              splitMode: true,
+              apartments: { select: { id: true, customSharePct: true } },
+            },
+          });
+        const shareById = new Map(shares.map((a) => [a.id, a.customSharePct]));
         const demandById = new Map(
           dto.demands.map((d) => [d.apartmentId, d.demandWh]),
         );
@@ -91,7 +97,7 @@ export class ReadingsService {
           dto.solarWh,
           building.apartments.map((a) => ({
             id: a.id,
-            weight: splitMode === 'ENTITLEMENT' ? a.lotEntitlement : 1,
+            weight: weightFor(splitMode, a.lotEntitlement, shareById.get(a.id)),
             demandWh: demandById.get(a.id)!, // the set was checked above
           })),
         );
@@ -168,6 +174,32 @@ export class ReadingsService {
       where: { deviceId_intervalStart: { deviceId, intervalStart } },
       include: readingInclude,
     });
+  }
+}
+
+/**
+ * The allocation engine's weight for one apartment (engine input only; the
+ * algorithm is unchanged): 1 for EQUAL, the lot entitlement for ENTITLEMENT,
+ * the owner-set share for CUSTOM (ADR-010).
+ */
+function weightFor(
+  splitMode: SplitMode,
+  lotEntitlement: number,
+  customSharePct: number | null | undefined,
+): number {
+  switch (splitMode) {
+    case SplitMode.ENTITLEMENT:
+      return lotEntitlement;
+    case SplitMode.CUSTOM:
+      // PATCH to CUSTOM requires every share, and shares can't be unset via the API.
+      if (customSharePct == null) {
+        throw new ConflictException(
+          'CUSTOM split mode needs an owner share for every apartment',
+        );
+      }
+      return customSharePct;
+    default:
+      return 1;
   }
 }
 
