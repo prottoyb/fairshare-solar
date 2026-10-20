@@ -9,7 +9,7 @@ describe('OPEN_METEO_URL', () => {
   it('asks for the Fawkner suburb centre, Melbourne time and unix timestamps', () => {
     expect(OPEN_METEO_URL).toBe(
       'https://api.open-meteo.com/v1/forecast?latitude=-37.707&longitude=144.968' +
-        '&hourly=shortwave_radiation,cloud_cover' +
+        '&hourly=shortwave_radiation,cloud_cover,temperature_2m' +
         '&daily=sunrise,sunset,sunshine_duration,daylight_duration' +
         '&timezone=Australia%2FMelbourne&timeformat=unixtime&past_days=2&forecast_days=7',
     );
@@ -53,7 +53,16 @@ describe('parseOpenMeteo (saved Fawkner fixture)', () => {
       endsAt: Date.parse('2026-10-20T02:00:00Z'),
       irradianceWm2: 877,
       cloudCoverPct: 52,
+      temperatureC: 26.6, // instantaneous at 13:00, not an hour mean
     });
+  });
+
+  it('parses a response without temperature as null temperatures', () => {
+    const raw = loadFixture() as { hourly: Record<string, unknown> };
+    delete raw.hourly.temperature_2m;
+    const hourly = parseOpenMeteo(raw, MEL).hourly;
+    expect(hourly).toHaveLength(216);
+    expect(hourly.every((h) => h.temperatureC === null)).toBe(true);
   });
 
   it('is dark before sunrise: the hour ending 06:00 local averages 0 W/m²', () => {

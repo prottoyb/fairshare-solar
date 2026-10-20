@@ -10,6 +10,7 @@ datasource db {
 enum SplitMode {
   EQUAL
   ENTITLEMENT
+  CUSTOM // owner-set shares (ADR-010)
 }
 
 model Building {
@@ -29,6 +30,7 @@ model Apartment {
   building       Building     @relation(fields: [buildingId], references: [id])
   label          String // "Unit 1"
   lotEntitlement Int // > 0
+  customSharePct Int? // owner-set share in %, 1–100 when set (ADR-010)
   demands        Demand[]
   allocations    Allocation[]
 

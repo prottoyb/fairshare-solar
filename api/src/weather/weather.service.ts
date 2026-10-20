@@ -1,7 +1,12 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { localDateString } from '../common/local-time';
 import { SITE } from '../common/site';
-import { HourlyIrradiance, intervalIrradiance } from '../simulator/profiles';
+import {
+  HourlyIrradiance,
+  intervalIrradiance,
+  TimedValue,
+  valueAt,
+} from '../simulator/profiles';
 import { DailyWeather, Forecast, parseOpenMeteo } from './open-meteo';
 import {
   WEATHER_CLOCK,
@@ -22,7 +27,14 @@ export type WeatherForDate =
 type CacheEntry = {
   forecast: Forecast;
   series: HourlyIrradiance[];
+  temperatures: TimedValue[];
   fetchedAt: number;
+};
+
+/** Weather for one interval; null fields mean "use the fallback / add nothing". */
+export type IntervalWeather = {
+  irradianceWm2: number | null;
+  temperatureC: number | null;
 };
 
 /**
@@ -84,6 +96,27 @@ export class WeatherService {
     return wm2;
   }
 
+  /**
+   * Irradiance and outdoor temperature for the interval starting at `start`,
+   * both sampled at its midpoint (ADR-008, ADR-009). Nulls in fallback.
+   */
+  async intervalWeather(
+    start: Date,
+    intervalMinutes: number,
+  ): Promise<IntervalWeather> {
+    const irradianceWm2 = await this.irradianceForInterval(
+      start,
+      intervalMinutes,
+    );
+    const entry = this.cache.get(localDateString(start, SITE.timeZone));
+    const midpoint = start.getTime() + (intervalMinutes * 60_000) / 2;
+    const temperatureC =
+      irradianceWm2 !== null && entry
+        ? valueAt(entry.temperatures, midpoint)
+        : null;
+    return { irradianceWm2, temperatureC };
+  }
+
   private async entryFor(date: string): Promise<CacheEntry | undefined> {
     const entry = this.cache.get(date);
     if (entry && this.isFresh(date, entry)) return entry;
@@ -131,12 +164,17 @@ export class WeatherService {
         endsAt: h.endsAt,
         wm2: h.irradianceWm2,
       }));
+      const temperatures = forecast.hourly.flatMap((h) =>
+        h.temperatureC === null
+          ? []
+          : [{ at: h.endsAt, value: h.temperatureC }],
+      );
       const fetchedAt = this.now();
       const today = this.today();
       for (const date of forecast.days.keys()) {
         // Past days are kept as first fetched ("forever"); others are replaced.
         if (date < today && this.cache.has(date)) continue;
-        this.cache.set(date, { forecast, series, fetchedAt });
+        this.cache.set(date, { forecast, series, temperatures, fetchedAt });
       }
       this.lastAttemptFailed = false;
     } catch (err) {

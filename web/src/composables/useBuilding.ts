@@ -1,6 +1,6 @@
 import { onMounted, ref, shallowRef } from 'vue'
 import { api, errorMessage } from '@/api/client'
-import type { BuildingDetail, SplitMode } from '@/types'
+import type { BuildingDetail, ShareInput, SplitMode } from '@/types'
 
 /** Loads the first building (the demo has one) and changes its split mode. */
 export function useBuilding() {
@@ -28,7 +28,13 @@ export function useBuilding() {
     building.value = await api.patchSplitMode(building.value.id, splitMode)
   }
 
+  /** PUTs the owner-set shares. Throws on failure so the caller can revert. */
+  async function setShares(shares: ShareInput[]): Promise<void> {
+    if (!building.value) throw new Error('Building not loaded yet')
+    building.value = await api.putShares(building.value.id, shares)
+  }
+
   onMounted(load)
 
-  return { building, loading, error, reload: load, setSplitMode }
+  return { building, loading, error, reload: load, setSplitMode, setShares }
 }

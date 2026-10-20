@@ -4,6 +4,7 @@ import type {
   DailySummary,
   ReadingResult,
   SimulatorStatus,
+  ShareInput,
   SplitMode,
   WeatherDay,
 } from '@/types'
@@ -50,6 +51,12 @@ export const api = {
     request<BuildingDetail>(`/api/buildings/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       ...json({ splitMode }),
+    }),
+
+  putShares: (id: string, shares: ShareInput[]) =>
+    request<BuildingDetail>(`/api/buildings/${encodeURIComponent(id)}/shares`, {
+      method: 'PUT',
+      ...json({ shares }),
     }),
 
   listReadings: (id: string, limit = 50) =>

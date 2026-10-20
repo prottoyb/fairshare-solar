@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { loadOpenMeteoFixture } from './__fixtures__/load-fixture';
+import { parseOpenMeteo } from './open-meteo';
 import {
   WEATHER_CACHE_TTL_MS,
   WEATHER_RETRY_AFTER_MS,
@@ -105,6 +106,39 @@ describe('WeatherService', () => {
     fetchForecast.mockRejectedValueOnce(new Error('timeout'));
     expect((await service.forDate('2026-10-20')).source).toBe('open-meteo');
     expect(fetchForecast).toHaveBeenCalledTimes(2);
+  });
+
+  describe('intervalWeather', () => {
+    it('adds the temperature, interpolated to the interval midpoint', async () => {
+      // 12:00–12:05 local: between the 12:00 and 13:00 instantaneous readings.
+      const hourly = parseOpenMeteo(
+        loadOpenMeteoFixture(),
+        'Australia/Melbourne',
+      ).hourly;
+      const at12 = hourly.find(
+        (h) => h.endsAt === Date.parse('2026-10-20T01:00:00Z'),
+      )!;
+      const at13 = hourly.find(
+        (h) => h.endsAt === Date.parse('2026-10-20T02:00:00Z'),
+      )!;
+      const expected =
+        at12.temperatureC! +
+        ((at13.temperatureC! - at12.temperatureC!) * 2.5) / 60;
+
+      const w = await service.intervalWeather(
+        new Date('2026-10-20T01:00:00.000Z'),
+        5,
+      );
+      expect(w.irradianceWm2).toBeCloseTo(716 + ((877 - 716) * 32.5) / 60, 6);
+      expect(w.temperatureC).toBeCloseTo(expected, 6);
+    });
+
+    it('returns nulls in fallback (no solar data, no heating/cooling)', async () => {
+      fetchForecast.mockRejectedValueOnce(new Error('down'));
+      expect(
+        await service.intervalWeather(new Date('2026-10-20T01:00:00.000Z'), 5),
+      ).toEqual({ irradianceWm2: null, temperatureC: null });
+    });
   });
 
   describe('irradianceForInterval', () => {

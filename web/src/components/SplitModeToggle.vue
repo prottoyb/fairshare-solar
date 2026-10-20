@@ -16,7 +16,18 @@ const options: { value: SplitMode; label: string; hint: string }[] = [
     label: 'By lot entitlement',
     hint: 'Weighted by each lot’s entitlement',
   },
+  {
+    value: 'CUSTOM',
+    label: 'Owner-set shares',
+    hint: 'Weighted by the shares the building owner sets',
+  },
 ]
+
+const testIds: Record<SplitMode, string> = {
+  EQUAL: 'split-equal',
+  ENTITLEMENT: 'split-entitlement',
+  CUSTOM: 'split-custom',
+}
 
 const selected = ref<SplitMode>(props.modelValue)
 const saving = ref(false)
@@ -58,7 +69,7 @@ async function onChange(): Promise<void> {
         type="radio"
         name="split-mode"
         :value="option.value"
-        :data-testid="option.value === 'ENTITLEMENT' ? 'split-entitlement' : 'split-equal'"
+        :data-testid="testIds[option.value]"
         @change="onChange"
       />
       <span>

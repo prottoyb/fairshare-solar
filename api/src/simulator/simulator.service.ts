@@ -113,7 +113,10 @@ export class SimulatorService implements OnModuleDestroy {
       select: {
         id: true,
         capacityW: true,
-        apartments: { select: { id: true }, orderBy: { label: 'asc' } },
+        apartments: {
+          select: { id: true, lotEntitlement: true },
+          orderBy: { label: 'asc' },
+        },
       },
     });
     if (!building) {
@@ -124,7 +127,7 @@ export class SimulatorService implements OnModuleDestroy {
     if (this.buildingId !== building.id || !this.generator) {
       this.generator = new ReadingGenerator(
         this.seed,
-        building.apartments.map((a) => a.id),
+        building.apartments,
         building.capacityW,
         SIM_DEVICE_ID,
         SITE.timeZone,
@@ -147,14 +150,11 @@ export class SimulatorService implements OnModuleDestroy {
     this.busy = true;
     const at = this.clock;
     try {
-      // Real irradiance for this interval, or null → clear-sky fallback (ADR-008).
-      const irradiance = await this.weather.irradianceForInterval(
-        at,
-        INTERVAL_MINUTES,
-      );
+      // Real irradiance and temperature, or nulls → clear-sky fallback (ADR-008/009).
+      const weather = await this.weather.intervalWeather(at, INTERVAL_MINUTES);
       await this.readings.ingest(
         this.buildingId,
-        this.generator.next(at, irradiance),
+        this.generator.next(at, weather),
       );
     } catch (err) {
       // Never let one bad interval stop the timer.

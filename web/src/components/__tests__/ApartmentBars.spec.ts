@@ -4,9 +4,9 @@ import ApartmentBars from '../ApartmentBars.vue'
 import type { Apartment, ReadingResult } from '@/types'
 
 const apartments: Apartment[] = [
-  { id: 'a1', label: 'Unit 1', lotEntitlement: 10 },
-  { id: 'a2', label: 'Unit 2', lotEntitlement: 15 },
-  { id: 'a3', label: 'Unit 3', lotEntitlement: 30 },
+  { id: 'a1', label: 'Unit 1', lotEntitlement: 10, customSharePct: 30 },
+  { id: 'a2', label: 'Unit 2', lotEntitlement: 15, customSharePct: 30 },
+  { id: 'a3', label: 'Unit 3', lotEntitlement: 30, customSharePct: 40 },
 ]
 
 const reading: ReadingResult = {

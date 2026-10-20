@@ -86,6 +86,53 @@ If two inserts race, the loser's `P2002` unique-violation is caught, and the sam
 - An idle day can't be "replayed" against changed weather: the same interval reingested with a newer forecast gets a 409, which the simulator logs and skips (ADR-006).
 - Showing Open-Meteo data requires the attribution "Weather data: Open-Meteo.com (CC BY 4.0)", with a link.
 
+## ADR-009 Realistic, deterministic apartment demand
+
+**Context.** User testing on the dev database found four problems:
+- **Jumpy.** Each 5-minute value was a fixed curve times fresh ±20 % noise. Unit 1 went 294 → 379 → 366 → 326 Wh, about 14 % change per interval.
+- **Looping.** Every flat followed the same shape every day.
+- **About three times too high.** Flats used 28–37 kWh a day and 700–860 W all night.
+- **History-dependent.** Values depended on how many readings had come before.
+
+**Decision.** Demand is a pure function of (`SIM_SEED`, flat index, Melbourne local date, interval of the day), plus the outdoor temperature, in `profiles.ts` (`intervalDemandWh`):
+- **Household size from lot size:** entitlement 10 → 1 person, 15 → 2, 20 → 2, 30 → 3 (`PERSONS_BY_ENTITLEMENT`). Daily targets are 7 / 10 / 13 kWh for 1 / 2 / 3 people (`DAILY_KWH_BY_PERSONS`), so the demo building averages **9.5 kWh per flat per day**. **Benchmark:** CitiPower (inner-Melbourne distributor) reports an average of 9.9 kWh/day for units in 2025. Source: Powercor media release ‘2025 CitiPower average daily household electricity consumption’ (https://www.powercor.com.au/news-and-media/media-releases/2025-citipower-average-daily-household-electricity-consumption): Units 9.9 kWh/day, House 14.9 kWh/day, CitiPower network (Melbourne CBD and inner suburbs). Fawkner is outside that area, so it is a nearby benchmark rather than the local distributor’s figure. It is a check on the level, not the source of the shape.
+- **Shape:** one normalised 24-hour **illustrative typical residential load shape, not measured data**. It has a low overnight base (fridge and standby), a morning peak around 06:30–08:30, low weekday daytime use, and an evening peak around 17:30–21:30. A weekend variant has a later, smaller morning peak and more daytime use. Hourly fractions sit at hh:30 and are interpolated linearly, wrapping round midnight, so there is no step at the hour and the day still sums to 1.
+- **Different flats, different days:**
+  - each flat's routine is shifted by a seeded −45…+45 minutes;
+  - a daily multiplier of 0.85–1.15 per (flat, date);
+  - smooth noise from a mean-reverting AR(1) walk per flat-day (spread 8 %, persistence 0.92), with its daily mean removed so it reshapes the day without changing its total;
+  - appliance events in waking hours (06:30–22:30): +40–150 Wh per interval for 1–4 intervals, at a probability of 0.006 per interval.
+
+  The day's actual event energy comes out of the shape's budget, so a flat's day totals about target × multiplier.
+- **Determinism:** every draw comes from `mulberry32`, seeded with an FNV-1a hash of (seed, flat, date, stream). Noise and events are generated for the whole local day and memoised. An interval's value never depends on how many readings came before, so a restart, the seed and the simulator produce identical values, and re-runs replay instead of 409.
+- **Heating and cooling** (weather-linked). `temperature_2m` is added to the Open-Meteo request and the saved fixture. It is an *instantaneous* value at the stamped time, unlike radiation's preceding-hour mean, so it is interpolated between timestamps to the interval midpoint. In waking hours (06:00–23:00), 40 W per °C below 16 °C and 60 W per °C above 26 °C are added, capped at 600 W. In fallback (no temperature), nothing is added.
+
+**Consequences.**
+- Each flat stays within ±20 % of its target, and the building averages 8–12 kWh/day: tested over two weeks of dates without weather. The median interval-to-interval change is under 6 %, flats peak at different times, and weekends differ from weekdays (all tested).
+- Heating and cooling add energy above the target on cold or hot days, as real homes do. The ±20 % test is run without weather.
+- The clear-sky solar fallback's cloud walk now has the generator's PRNG to itself, so its random sequence differs from before. Its formula is unchanged.
+- The fixture now combines two real Open-Meteo responses for 18–26 October 2026: the original forecast, plus `temperature_2m` requested later for the same dates with `start_date`/`end_date`. The merge checked that the hourly timestamps match exactly.
+
+## ADR-010 Owner-set shares (CUSTOM split mode)
+
+**Context.** The building owner had no way to set the split. The only write endpoint changed the mode between Equal and Entitlement, and lot entitlements are fixed by the seed (and by strata records in real life).
+
+**Decision.**
+- **Data.** A third split mode, `CUSTOM` ("Owner-set shares" in the UI), and `Apartment.customSharePct Int?`. A database CHECK keeps it between 1 and 100 when set. The seed's default is 15/15/15/15/20/20, visibly different from Equal (16.7 % each) and Entitlement (10/10/15/15/20/30). A re-seed fills only missing shares and keeps the owner's choice.
+- **API.** `PUT /api/buildings/:id/shares` with `{ shares: [{ apartmentId, sharePct }] }`. Checks run in order:
+  1. DTO: whole numbers 1–100, a non-empty list, no unknown fields;
+  2. the building exists (404);
+  3. exactly one entry per apartment, naming missing, unknown or duplicate ids;
+  4. the total is exactly 100 (400, giving the actual total).
+
+  All shares are written in one transaction, and the building is returned with its apartments. `GET /api/buildings/:id` includes `customSharePct`. `PATCH` accepts `CUSTOM`, with a 400 naming any unit without a share.
+- **Engine input only.** In `CUSTOM` mode the weight is `customSharePct`; the allocation algorithm is unchanged (ADR-007). The mode and shares are read inside the ingest transaction, the same snapshot rule as ADR-003. A change applies from the next interval, and past readings never change: `splitModeUsed` and the stored allocations keep history truthful. The shares themselves aren't copied onto each reading.
+- **No auth.** The UI panel is labelled "Building owner settings". In a real product it would sit behind owner authentication (README "What I'd do next"). This demo adds none.
+
+**Consequences.**
+- The owner can favour anyone, for example a flat that paid for more panels. Water-filling still caps everyone at their demand and shares the rest (I1–I3 still hold), so shares only matter while solar is scarce, as with the other modes.
+- Shares are whole percentages totalling 100 exactly, which keeps the input simple and auditable. Finer splits would need a different unit.
+
 ## Build-time decisions
 
 - **M1: web toolchain versions come from `create-vue@3.24.0` as generated.** It scaffolded Vue 3.5, Vite 8, **Vitest 4.1** (the spec expected 5) and **TypeScript 6.0** in `web`. The TypeScript-below-7 rule only matters for the API (ts-jest), and vue-tsc 3.3 supports TS 6, so the scaffold's versions are kept rather than hand-editing them. API stays on TypeScript 5.9.3.
@@ -151,3 +198,10 @@ If two inserts race, the loser's `P2002` unique-violation is caught, and the sam
 - **W3: `WeatherCard`** sits under "This interval" in the middle column, so at 1280×720 everything the video needs stays above the fold. It shows sunrise, sunset, "Sunshine X h of Y h daylight", and the hour mean containing the interval on screen. It says plainly when the source is the clear-sky fallback, and always shows the CC BY 4.0 attribution with links. Covered by 4 Vitest tests (mocked `fetch`).
 - **W3: `docs/dashboard.png` was retaken.** The old one showed UTC times and the old building name. The new one is 17:20 AEDT on a simulated 21 October in Entitlement mode with real weather: 223 Wh shared 22/22/34/33/45/67 Wh. It was captured with a one-off Cypress spec that was not committed.
 - **W3: the simulator's "Stopped." hint no longer says "Simulated data only"**, because solar is now an estimate from real weather.
+- **D1: realistic demand (ADR-009).** The old `baseDemandWh` / `demandWh` and their tests are replaced by `intervalDemandWh` and `demand.spec.ts` (18 tests covering every target in the requirements). `ReadingGenerator` now takes `{ id, lotEntitlement }` per flat and `{ irradianceWm2, temperatureC }` per interval. `WeatherService.intervalWeather()` returns both from the same cache entry (nulls in fallback). The simulator and the seed use it.
+- **D1: a first version failed the ±20 % test on one flat-day (79 % of target).** The noise could drift below zero over a whole day, and a day without appliance events fell under the shape budget reserved for them. Rather than loosen the test, the noise is now mean-zero per day, and the day's actual event energy comes out of the budget. The daily total then follows the multiplier, as designed.
+- **D2: owner-set shares backend (ADR-010).** The migration `owner_shares` was written by hand (adding the `CUSTOM` enum value, the `customSharePct` column and its CHECK), so `fairshare_dev` wasn't touched before the user's reset. It was applied to `fairshare_test` with `migrate deploy`, and `prisma migrate diff` against the schema shows no drift. The seed fills only missing shares and never overwrites one already set (tested). The `splitMode` validation message now lists `EQUAL, ENTITLEMENT, CUSTOM`; that e2e expectation was updated for the new enum value.
+- **D3: owner settings UI.** `SplitModeToggle` gains a third radio, "Owner-set shares" (`data-testid="split-custom"`). `OwnerSettings.vue` is a `<details>` disclosure under Split mode. It has a fieldset/legend, one labelled number input per unit (with its entitlement), a live total in an `aria-live` region, and Save enabled only when every share is a whole 1–100 and the total is exactly 100. A failed PUT reverts the inputs and shows the error, the same pattern as the toggle. The existing toggle test now expects three radios (the spec gained a mode), and the `ApartmentBars` fixtures carry the new `customSharePct` field.
+- **D3: browser check.** At 1280×720 and 375 px: three modes, the owner panel opened, a live total while typing (Save disabled at 95 %), shares saved, `CUSTOM` chosen, and a live scarce interval at 17:45 AEDT split 17/17/17/35/35/52 Wh for 10/10/10/20/20/30 %. No horizontal page scroll at 375 px. The Cypress smoke passes unchanged. The dev database was left in Equal with the seeded shares.
+- **D3: the simulator controls only know the status from their own requests.** Starting the simulator through the API (as the checks do to fast-forward) leaves the panel showing "Stopped." until the next click. This was already true before these changes and is out of scope here.
+- **Fix: simulator status sync.** `SimulatorControls` now re-fetches `GET /api/simulator/status` whenever the live `device-status` changes and when the socket reconnects (props from `useLive` via App). So a start or stop made in another tab or through the API shows up: Running shortly after a start, Stopped when the device goes Stale a few seconds after a stop. There is no polling and no new package. Its own Start/Stop clicks work as before, and a sync is skipped while one of its own requests is in flight. Covered by `SimulatorControls.spec.ts` (mocked `fetch`).

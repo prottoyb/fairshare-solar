@@ -6,6 +6,7 @@ import BuildingHeader from '@/components/BuildingHeader.vue'
 import DailySummary from '@/components/DailySummary.vue'
 import LiveFlow from '@/components/LiveFlow.vue'
 import SimulatorControls from '@/components/SimulatorControls.vue'
+import OwnerSettings from '@/components/OwnerSettings.vue'
 import SplitModeToggle from '@/components/SplitModeToggle.vue'
 import WeatherCard from '@/components/WeatherCard.vue'
 import { useBuilding } from '@/composables/useBuilding'
@@ -13,7 +14,7 @@ import { useLive } from '@/composables/useLive'
 import { siteDateString } from '@/format'
 import type { ReadingResult, SimulatorStatus } from '@/types'
 
-const { building, loading, error, setSplitMode } = useBuilding()
+const { building, loading, error, setSplitMode, setShares } = useBuilding()
 const { connected, latestReading, deviceStatus, receivedCount } = useLive()
 
 const simulator = shallowRef<SimulatorStatus | null>(null)
@@ -60,10 +61,15 @@ const summaryDate = computed(() => {
       <main class="layout">
         <div class="column area-controls">
           <div class="panel">
-            <SimulatorControls @status="simulator = $event" />
+            <SimulatorControls
+              :device-status="deviceStatus?.status ?? null"
+              :connected="connected"
+              @status="simulator = $event"
+            />
           </div>
           <div class="panel">
             <SplitModeToggle :model-value="building.splitMode" :save="setSplitMode" />
+            <OwnerSettings :apartments="building.apartments" :save="setShares" />
           </div>
         </div>
         <div class="column area-live">
